@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "crates/dot-agent-core",
+    "crates/dot-agent-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Yutaka Nishimura"]
+repository = "https://github.com/ynishi/dot-agent"
+homepage = "https://github.com/ynishi/dot-agent"
+rust-version = "1.75"
+keywords = ["cli", "dotfiles", "configuration", "ai", "claude"]
+categories = ["command-line-utilities", "config"]
+
+[workspace.dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+colored = "2"
+dirs = "5"
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
+egui-cha = "0.2"
+egui-cha-ds = "0.2"
+hex = "0.4"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+thiserror = "2"
+toml = "0.8"
+walkdir = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

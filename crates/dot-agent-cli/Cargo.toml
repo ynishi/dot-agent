@@ -1,0 +1,33 @@
+[package]
+name = "dot-agent-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Profile-based configuration manager for AI agents"
+readme = "../../README.md"
+
+[[bin]]
+name = "dot-agent"
+path = "src/main.rs"
+
+[features]
+default = []
+gui = ["eframe", "egui-cha", "egui-cha-ds", "rfd"]
+
+[dependencies]
+dot-agent-core = { path = "../dot-agent-core", version = "0.1.0" }
+clap.workspace = true
+clap_complete.workspace = true
+colored.workspace = true
+dirs.workspace = true
+
+# GUI dependencies (optional)
+eframe = { workspace = true, optional = true }
+egui-cha = { workspace = true, optional = true }
+egui-cha-ds = { workspace = true, optional = true }
+rfd = { workspace = true, optional = true }
