@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, Utc};
@@ -9,10 +10,11 @@ use walkdir::WalkDir;
 use crate::error::{DotAgentError, Result};
 use crate::metadata::compute_hash;
 
-const SNAPSHOTS_DIR: &str = "target-snapshots";
+const TARGET_SNAPSHOTS_DIR: &str = "target-snapshots";
+const PROFILE_SNAPSHOTS_DIR: &str = "profile-snapshots";
 const MANIFEST_FILE: &str = "manifest.toml";
 
-/// Directories to exclude from snapshots (Claude Code system directories)
+/// Directories to exclude from target snapshots (Claude Code system directories)
 const EXCLUDED_DIRS: &[&str] = &[
     "debug",
     "file-history",
@@ -29,7 +31,7 @@ const EXCLUDED_DIRS: &[&str] = &[
     "_bk",
 ];
 
-/// Files to exclude from snapshots
+/// Files to exclude from target snapshots
 const EXCLUDED_FILES: &[&str] = &[
     ".DS_Store",
     "history.jsonl",
@@ -69,8 +71,108 @@ impl std::fmt::Display for SnapshotTrigger {
     }
 }
 
-fn should_exclude(path: &Path, base: &Path) -> bool {
-    // Check filename
+// ============================================================================
+// Snapshot Target Trait
+// ============================================================================
+
+/// Trait for types that can be snapshot targets
+pub trait SnapshotTarget {
+    /// Get the storage directory for snapshots of this target
+    fn storage_dir(&self, base_dir: &Path) -> PathBuf;
+
+    /// Get the content path to snapshot
+    fn content_path(&self) -> &Path;
+
+    /// Get identifier for display/messages
+    fn identifier(&self) -> String;
+
+    /// Check if a file should be excluded from snapshot
+    fn should_exclude(&self, path: &Path, base: &Path) -> bool;
+
+    /// Error to return when source doesn't exist
+    fn not_found_error(&self) -> DotAgentError;
+}
+
+/// Target directory snapshot (e.g., ~/.claude or project/.claude)
+#[derive(Debug, Clone)]
+pub struct TargetDir {
+    path: PathBuf,
+}
+
+impl TargetDir {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl SnapshotTarget for TargetDir {
+    fn storage_dir(&self, base_dir: &Path) -> PathBuf {
+        let hash = compute_hash(self.path.to_string_lossy().as_bytes());
+        let short_hash = &hash[..12];
+        base_dir.join(TARGET_SNAPSHOTS_DIR).join(short_hash)
+    }
+
+    fn content_path(&self) -> &Path {
+        &self.path
+    }
+
+    fn identifier(&self) -> String {
+        self.path.to_string_lossy().to_string()
+    }
+
+    fn should_exclude(&self, path: &Path, base: &Path) -> bool {
+        should_exclude_target(path, base)
+    }
+
+    fn not_found_error(&self) -> DotAgentError {
+        DotAgentError::TargetNotFound {
+            path: self.path.clone(),
+        }
+    }
+}
+
+/// Profile source directory snapshot
+#[derive(Debug, Clone)]
+pub struct ProfileDir {
+    name: String,
+    path: PathBuf,
+}
+
+impl ProfileDir {
+    pub fn new(name: String, path: PathBuf) -> Self {
+        Self { name, path }
+    }
+}
+
+impl SnapshotTarget for ProfileDir {
+    fn storage_dir(&self, base_dir: &Path) -> PathBuf {
+        base_dir.join(PROFILE_SNAPSHOTS_DIR).join(&self.name)
+    }
+
+    fn content_path(&self) -> &Path {
+        &self.path
+    }
+
+    fn identifier(&self) -> String {
+        self.name.clone()
+    }
+
+    fn should_exclude(&self, path: &Path, _base: &Path) -> bool {
+        should_exclude_profile(path)
+    }
+
+    fn not_found_error(&self) -> DotAgentError {
+        DotAgentError::ProfileNotFound {
+            name: self.name.clone(),
+        }
+    }
+}
+
+// ============================================================================
+// Exclusion Filters
+// ============================================================================
+
+fn should_exclude_target(path: &Path, base: &Path) -> bool {
     if let Some(name) = path.file_name() {
         let name_str = name.to_string_lossy();
         if EXCLUDED_FILES.iter().any(|&f| name_str == f) {
@@ -81,7 +183,6 @@ fn should_exclude(path: &Path, base: &Path) -> bool {
         }
     }
 
-    // Check if path is inside excluded directory
     if let Ok(relative) = path.strip_prefix(base) {
         if let Some(first_component) = relative.components().next() {
             let first = first_component.as_os_str().to_string_lossy();
@@ -94,6 +195,21 @@ fn should_exclude(path: &Path, base: &Path) -> bool {
     false
 }
 
+fn should_exclude_profile(path: &Path) -> bool {
+    if let Some(name) = path.file_name() {
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') || name_str == ".DS_Store" {
+            return true;
+        }
+    }
+    false
+}
+
+// ============================================================================
+// Snapshot Data Structures
+// ============================================================================
+
+/// Snapshot metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub id: String,
@@ -105,6 +221,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Format timestamp for display in local timezone
     pub fn display_time(&self) -> String {
         self.timestamp
             .with_timezone(&Local)
@@ -113,13 +230,11 @@ impl Snapshot {
     }
 }
 
+/// Manifest storing list of snapshots for a target
 #[derive(Debug, Serialize, Deserialize)]
 struct SnapshotManifest {
-    /// Original target path (for reference)
     target_path: String,
-    /// When manifest was first created
     created_at: DateTime<Utc>,
-    /// List of snapshots
     snapshots: Vec<Snapshot>,
 }
 
@@ -133,25 +248,41 @@ impl Default for SnapshotManifest {
     }
 }
 
-pub struct SnapshotManager {
-    base_dir: PathBuf,
+/// Differences between a snapshot and current state
+#[derive(Debug, Default)]
+pub struct SnapshotDiff {
+    pub unchanged: Vec<String>,
+    pub modified: Vec<String>,
+    pub added: Vec<String>,
+    pub deleted: Vec<String>,
 }
 
-impl SnapshotManager {
+impl SnapshotDiff {
+    pub fn has_changes(&self) -> bool {
+        !self.modified.is_empty() || !self.added.is_empty() || !self.deleted.is_empty()
+    }
+}
+
+// ============================================================================
+// Generic Snapshot Manager
+// ============================================================================
+
+/// Generic snapshot manager that works with any SnapshotTarget
+pub struct GenericSnapshotManager<T: SnapshotTarget> {
+    base_dir: PathBuf,
+    _marker: PhantomData<T>,
+}
+
+impl<T: SnapshotTarget> GenericSnapshotManager<T> {
     pub fn new(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            _marker: PhantomData,
+        }
     }
 
-    /// Get snapshots directory for a specific target
-    fn snapshots_dir(&self, target: &Path) -> PathBuf {
-        let target_hash = compute_hash(target.to_string_lossy().as_bytes());
-        let short_hash = &target_hash[..12];
-        self.base_dir.join(SNAPSHOTS_DIR).join(short_hash)
-    }
-
-    /// Load manifest for a target
-    fn load_manifest(&self, target: &Path) -> Result<SnapshotManifest> {
-        let manifest_path = self.snapshots_dir(target).join(MANIFEST_FILE);
+    fn load_manifest(&self, target: &T) -> Result<SnapshotManifest> {
+        let manifest_path = target.storage_dir(&self.base_dir).join(MANIFEST_FILE);
         if !manifest_path.exists() {
             return Ok(SnapshotManifest::default());
         }
@@ -159,57 +290,48 @@ impl SnapshotManager {
         toml::from_str(&content).map_err(DotAgentError::TomlDe)
     }
 
-    /// Save manifest for a target
-    fn save_manifest(&self, target: &Path, manifest: &SnapshotManifest) -> Result<()> {
-        let snapshots_dir = self.snapshots_dir(target);
-        fs::create_dir_all(&snapshots_dir)?;
-        let manifest_path = snapshots_dir.join(MANIFEST_FILE);
+    fn save_manifest(&self, target: &T, manifest: &SnapshotManifest) -> Result<()> {
+        let storage_dir = target.storage_dir(&self.base_dir);
+        fs::create_dir_all(&storage_dir)?;
+        let manifest_path = storage_dir.join(MANIFEST_FILE);
         let content = toml::to_string_pretty(manifest)?;
         fs::write(manifest_path, content)?;
         Ok(())
     }
 
-    /// Save a snapshot of the target directory
-    ///
-    /// # Arguments
-    /// * `target` - Target directory to snapshot
-    /// * `trigger` - What triggered this snapshot
-    /// * `message` - Optional description
-    /// * `profiles_affected` - Profiles involved in this operation
+    /// Save a snapshot of the target
     pub fn save(
         &self,
-        target: &Path,
+        target: &T,
         trigger: SnapshotTrigger,
         message: Option<&str>,
         profiles_affected: &[String],
     ) -> Result<Snapshot> {
-        if !target.exists() {
-            return Err(DotAgentError::TargetNotFound {
-                path: target.to_path_buf(),
-            });
+        let content_path = target.content_path();
+        if !content_path.exists() {
+            return Err(target.not_found_error());
         }
 
         let timestamp = Utc::now();
         let id = timestamp.format("%Y%m%d_%H%M%S").to_string();
 
-        let snapshot_dir = self.snapshots_dir(target).join(&id);
+        let snapshot_dir = target.storage_dir(&self.base_dir).join(&id);
         fs::create_dir_all(&snapshot_dir)?;
 
-        // Copy all files from target to snapshot (excluding system files)
+        // Copy files from content to snapshot
         let mut file_count = 0;
-        for entry in WalkDir::new(target)
+        for entry in WalkDir::new(content_path)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().is_file())
         {
             let src = entry.path();
 
-            // Use should_exclude for comprehensive filtering
-            if should_exclude(src, target) {
+            if target.should_exclude(src, content_path) {
                 continue;
             }
 
-            if let Ok(relative) = src.strip_prefix(target) {
+            if let Ok(relative) = src.strip_prefix(content_path) {
                 let dst = snapshot_dir.join(relative);
                 if let Some(parent) = dst.parent() {
                     fs::create_dir_all(parent)?;
@@ -220,7 +342,7 @@ impl SnapshotManager {
         }
 
         let snapshot = Snapshot {
-            id: id.clone(),
+            id,
             timestamp,
             trigger,
             message: message.map(String::from),
@@ -230,9 +352,8 @@ impl SnapshotManager {
 
         // Update manifest
         let mut manifest = self.load_manifest(target)?;
-        // Set target_path if this is a new manifest
         if manifest.target_path.is_empty() {
-            manifest.target_path = target.to_string_lossy().to_string();
+            manifest.target_path = target.identifier();
         }
         manifest.snapshots.push(snapshot.clone());
         self.save_manifest(target, &manifest)?;
@@ -240,19 +361,14 @@ impl SnapshotManager {
         Ok(snapshot)
     }
 
-    /// Convenience method for manual snapshots (backward compatible)
-    pub fn save_manual(&self, target: &Path, message: Option<&str>) -> Result<Snapshot> {
-        self.save(target, SnapshotTrigger::Manual, message, &[])
-    }
-
     /// List all snapshots for a target
-    pub fn list(&self, target: &Path) -> Result<Vec<Snapshot>> {
+    pub fn list(&self, target: &T) -> Result<Vec<Snapshot>> {
         let manifest = self.load_manifest(target)?;
         Ok(manifest.snapshots)
     }
 
     /// Get a specific snapshot
-    pub fn get(&self, target: &Path, id: &str) -> Result<Snapshot> {
+    pub fn get(&self, target: &T, id: &str) -> Result<Snapshot> {
         let manifest = self.load_manifest(target)?;
         manifest
             .snapshots
@@ -262,39 +378,36 @@ impl SnapshotManager {
     }
 
     /// Restore a snapshot
-    pub fn restore(&self, target: &Path, id: &str) -> Result<(usize, usize)> {
-        let _ = self.get(target, id)?; // Verify snapshot exists
+    pub fn restore(&self, target: &T, id: &str) -> Result<(usize, usize)> {
+        let _ = self.get(target, id)?;
 
-        let snapshot_dir = self.snapshots_dir(target).join(id);
+        let snapshot_dir = target.storage_dir(&self.base_dir).join(id);
         if !snapshot_dir.exists() {
             return Err(DotAgentError::SnapshotNotFound { id: id.to_string() });
         }
 
-        // Clear target directory (except metadata)
+        let content_path = target.content_path();
+
+        // Clear content directory
         let mut removed = 0;
-        if target.exists() {
-            for entry in WalkDir::new(target)
+        if content_path.exists() {
+            for entry in WalkDir::new(content_path)
                 .into_iter()
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().is_file())
             {
                 let path = entry.path();
-                if path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().starts_with(".dot-agent"))
-                    .unwrap_or(false)
-                {
+                if target.should_exclude(path, content_path) {
                     continue;
                 }
                 fs::remove_file(path)?;
                 removed += 1;
             }
-            // Clean empty directories
-            clean_empty_dirs(target)?;
+            clean_empty_dirs(content_path)?;
         }
 
-        // Copy files from snapshot to target
-        fs::create_dir_all(target)?;
+        // Copy files from snapshot to content
+        fs::create_dir_all(content_path)?;
         let mut restored = 0;
         for entry in WalkDir::new(&snapshot_dir)
             .into_iter()
@@ -303,7 +416,7 @@ impl SnapshotManager {
         {
             let src = entry.path();
             if let Ok(relative) = src.strip_prefix(&snapshot_dir) {
-                let dst = target.join(relative);
+                let dst = content_path.join(relative);
                 if let Some(parent) = dst.parent() {
                     fs::create_dir_all(parent)?;
                 }
@@ -316,25 +429,24 @@ impl SnapshotManager {
     }
 
     /// Compare snapshot with current state
-    pub fn diff(&self, target: &Path, id: &str) -> Result<SnapshotDiff> {
+    pub fn diff(&self, target: &T, id: &str) -> Result<SnapshotDiff> {
         let _ = self.get(target, id)?;
 
-        let snapshot_dir = self.snapshots_dir(target).join(id);
+        let snapshot_dir = target.storage_dir(&self.base_dir).join(id);
         if !snapshot_dir.exists() {
             return Err(DotAgentError::SnapshotNotFound { id: id.to_string() });
         }
 
+        let content_path = target.content_path();
         let mut diff = SnapshotDiff::default();
 
-        // Build file maps
         let snapshot_files = collect_files(&snapshot_dir)?;
-        let current_files = if target.exists() {
-            collect_files_filtered(target)?
+        let current_files = if content_path.exists() {
+            collect_files_filtered(content_path, |p| target.should_exclude(p, content_path))?
         } else {
             HashMap::new()
         };
 
-        // Check snapshot files against current
         for (path, snap_hash) in &snapshot_files {
             match current_files.get(path) {
                 Some(curr_hash) if curr_hash == snap_hash => {
@@ -349,7 +461,6 @@ impl SnapshotManager {
             }
         }
 
-        // Check for new files
         for path in current_files.keys() {
             if !snapshot_files.contains_key(path) {
                 diff.added.push(path.clone());
@@ -365,15 +476,14 @@ impl SnapshotManager {
     }
 
     /// Delete a snapshot
-    pub fn delete(&self, target: &Path, id: &str) -> Result<()> {
+    pub fn delete(&self, target: &T, id: &str) -> Result<()> {
         let _ = self.get(target, id)?;
 
-        let snapshot_dir = self.snapshots_dir(target).join(id);
+        let snapshot_dir = target.storage_dir(&self.base_dir).join(id);
         if snapshot_dir.exists() {
             fs::remove_dir_all(&snapshot_dir)?;
         }
 
-        // Update manifest
         let mut manifest = self.load_manifest(target)?;
         manifest.snapshots.retain(|s| s.id != id);
         self.save_manifest(target, &manifest)?;
@@ -382,40 +492,36 @@ impl SnapshotManager {
     }
 
     /// Prune old snapshots, keeping only the most recent `keep` snapshots
-    ///
-    /// Returns the number of deleted snapshots and their IDs
-    pub fn prune(&self, target: &Path, keep: usize) -> Result<Vec<String>> {
+    pub fn prune(&self, target: &T, keep: usize) -> Result<Vec<String>> {
         let mut manifest = self.load_manifest(target)?;
 
         if manifest.snapshots.len() <= keep {
             return Ok(vec![]);
         }
 
-        // Sort by timestamp (oldest first)
-        manifest.snapshots.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        manifest
+            .snapshots
+            .sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
-        // Calculate how many to remove
         let to_remove = manifest.snapshots.len() - keep;
         let removed: Vec<Snapshot> = manifest.snapshots.drain(..to_remove).collect();
 
-        // Delete snapshot directories
         let mut deleted_ids = Vec::new();
         for snap in &removed {
-            let snapshot_dir = self.snapshots_dir(target).join(&snap.id);
+            let snapshot_dir = target.storage_dir(&self.base_dir).join(&snap.id);
             if snapshot_dir.exists() {
                 fs::remove_dir_all(&snapshot_dir)?;
             }
             deleted_ids.push(snap.id.clone());
         }
 
-        // Save updated manifest
         self.save_manifest(target, &manifest)?;
 
         Ok(deleted_ids)
     }
 
-    /// Get the latest snapshot for a target
-    pub fn latest(&self, target: &Path) -> Result<Option<Snapshot>> {
+    /// Get the latest snapshot
+    pub fn latest(&self, target: &T) -> Result<Option<Snapshot>> {
         let manifest = self.load_manifest(target)?;
         Ok(manifest
             .snapshots
@@ -424,19 +530,142 @@ impl SnapshotManager {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct SnapshotDiff {
-    pub unchanged: Vec<String>,
-    pub modified: Vec<String>,
-    pub added: Vec<String>,
-    pub deleted: Vec<String>,
-}
+// ============================================================================
+// Type Aliases for Backward Compatibility
+// ============================================================================
 
-impl SnapshotDiff {
-    pub fn has_changes(&self) -> bool {
-        !self.modified.is_empty() || !self.added.is_empty() || !self.deleted.is_empty()
+/// Snapshot manager for target directories (e.g., installed .claude folders)
+pub type SnapshotManager = GenericSnapshotManager<TargetDir>;
+
+/// Snapshot manager for profile source directories
+pub type ProfileSnapshotManager = GenericSnapshotManager<ProfileDir>;
+
+// ============================================================================
+// Convenience Methods for SnapshotManager
+// ============================================================================
+
+impl SnapshotManager {
+    /// Save a snapshot of a target directory
+    pub fn save_target(
+        &self,
+        target: &Path,
+        trigger: SnapshotTrigger,
+        message: Option<&str>,
+        profiles_affected: &[String],
+    ) -> Result<Snapshot> {
+        let target_dir = TargetDir::new(target.to_path_buf());
+        self.save(&target_dir, trigger, message, profiles_affected)
+    }
+
+    /// List snapshots for a target directory
+    pub fn list_target(&self, target: &Path) -> Result<Vec<Snapshot>> {
+        let target_dir = TargetDir::new(target.to_path_buf());
+        self.list(&target_dir)
+    }
+
+    /// Get a specific snapshot for a target directory
+    pub fn get_target(&self, target: &Path, id: &str) -> Result<Snapshot> {
+        let target_dir = TargetDir::new(target.to_path_buf());
+        self.get(&target_dir, id)
+    }
+
+    /// Restore a snapshot to a target directory
+    pub fn restore_target(&self, target: &Path, id: &str) -> Result<(usize, usize)> {
+        let target_dir = TargetDir::new(target.to_path_buf());
+        self.restore(&target_dir, id)
+    }
+
+    /// Compare snapshot with current target state
+    pub fn diff_target(&self, target: &Path, id: &str) -> Result<SnapshotDiff> {
+        let target_dir = TargetDir::new(target.to_path_buf());
+        self.diff(&target_dir, id)
+    }
+
+    /// Delete a snapshot for a target directory
+    pub fn delete_target(&self, target: &Path, id: &str) -> Result<()> {
+        let target_dir = TargetDir::new(target.to_path_buf());
+        self.delete(&target_dir, id)
+    }
+
+    /// Prune old snapshots for a target directory
+    pub fn prune_target(&self, target: &Path, keep: usize) -> Result<Vec<String>> {
+        let target_dir = TargetDir::new(target.to_path_buf());
+        self.prune(&target_dir, keep)
     }
 }
+
+// ============================================================================
+// Convenience Methods for ProfileSnapshotManager
+// ============================================================================
+
+impl ProfileSnapshotManager {
+    /// Save a snapshot of a profile
+    pub fn save_profile(
+        &self,
+        profile_name: &str,
+        profile_path: &Path,
+        message: Option<&str>,
+    ) -> Result<Snapshot> {
+        let profile_dir = ProfileDir::new(profile_name.to_string(), profile_path.to_path_buf());
+        self.save(
+            &profile_dir,
+            SnapshotTrigger::Manual,
+            message,
+            &[profile_name.to_string()],
+        )
+    }
+
+    /// List snapshots for a profile
+    pub fn list_profile(&self, profile_name: &str) -> Result<Vec<Snapshot>> {
+        // Use empty path for listing - we only need the name for storage_dir
+        let profile_dir = ProfileDir::new(profile_name.to_string(), PathBuf::new());
+        self.list(&profile_dir)
+    }
+
+    /// Get a specific snapshot for a profile
+    pub fn get_profile(&self, profile_name: &str, id: &str) -> Result<Snapshot> {
+        let profile_dir = ProfileDir::new(profile_name.to_string(), PathBuf::new());
+        self.get(&profile_dir, id)
+    }
+
+    /// Restore a snapshot to a profile directory
+    pub fn restore_profile(
+        &self,
+        profile_name: &str,
+        profile_path: &Path,
+        id: &str,
+    ) -> Result<(usize, usize)> {
+        let profile_dir = ProfileDir::new(profile_name.to_string(), profile_path.to_path_buf());
+        self.restore(&profile_dir, id)
+    }
+
+    /// Compare snapshot with current profile state
+    pub fn diff_profile(
+        &self,
+        profile_name: &str,
+        profile_path: &Path,
+        id: &str,
+    ) -> Result<SnapshotDiff> {
+        let profile_dir = ProfileDir::new(profile_name.to_string(), profile_path.to_path_buf());
+        self.diff(&profile_dir, id)
+    }
+
+    /// Delete a snapshot for a profile
+    pub fn delete_profile(&self, profile_name: &str, id: &str) -> Result<()> {
+        let profile_dir = ProfileDir::new(profile_name.to_string(), PathBuf::new());
+        self.delete(&profile_dir, id)
+    }
+
+    /// Prune old snapshots for a profile
+    pub fn prune_profile(&self, profile_name: &str, keep: usize) -> Result<Vec<String>> {
+        let profile_dir = ProfileDir::new(profile_name.to_string(), PathBuf::new());
+        self.prune(&profile_dir, keep)
+    }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
 fn collect_files(dir: &Path) -> Result<HashMap<String, String>> {
     let mut files = HashMap::new();
@@ -455,7 +684,10 @@ fn collect_files(dir: &Path) -> Result<HashMap<String, String>> {
     Ok(files)
 }
 
-fn collect_files_filtered(dir: &Path) -> Result<HashMap<String, String>> {
+fn collect_files_filtered<F>(dir: &Path, should_exclude: F) -> Result<HashMap<String, String>>
+where
+    F: Fn(&Path) -> bool,
+{
     let mut files = HashMap::new();
     for entry in WalkDir::new(dir)
         .into_iter()
@@ -463,12 +695,7 @@ fn collect_files_filtered(dir: &Path) -> Result<HashMap<String, String>> {
         .filter(|e| e.path().is_file())
     {
         let path = entry.path();
-        // Skip metadata files
-        if path
-            .file_name()
-            .map(|n| n.to_string_lossy().starts_with(".dot-agent"))
-            .unwrap_or(false)
-        {
+        if should_exclude(path) {
             continue;
         }
         if let Ok(relative) = path.strip_prefix(dir) {
@@ -493,276 +720,4 @@ fn clean_empty_dirs(dir: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-// ============================================================================
-// Profile Snapshot Manager
-// ============================================================================
-
-const PROFILE_SNAPSHOTS_DIR: &str = "profile-snapshots";
-
-/// Manages snapshots for profile source directories
-pub struct ProfileSnapshotManager {
-    base_dir: PathBuf,
-}
-
-impl ProfileSnapshotManager {
-    pub fn new(base_dir: PathBuf) -> Self {
-        Self { base_dir }
-    }
-
-    /// Get snapshots directory for a specific profile
-    fn snapshots_dir(&self, profile_name: &str) -> PathBuf {
-        self.base_dir.join(PROFILE_SNAPSHOTS_DIR).join(profile_name)
-    }
-
-    /// Load manifest for a profile
-    fn load_manifest(&self, profile_name: &str) -> Result<SnapshotManifest> {
-        let manifest_path = self.snapshots_dir(profile_name).join(MANIFEST_FILE);
-        if !manifest_path.exists() {
-            return Ok(SnapshotManifest::default());
-        }
-        let content = fs::read_to_string(&manifest_path)?;
-        toml::from_str(&content).map_err(DotAgentError::TomlDe)
-    }
-
-    /// Save manifest for a profile
-    fn save_manifest(&self, profile_name: &str, manifest: &SnapshotManifest) -> Result<()> {
-        let snapshots_dir = self.snapshots_dir(profile_name);
-        fs::create_dir_all(&snapshots_dir)?;
-        let manifest_path = snapshots_dir.join(MANIFEST_FILE);
-        let content = toml::to_string_pretty(manifest)?;
-        fs::write(manifest_path, content)?;
-        Ok(())
-    }
-
-    /// Save a snapshot of a profile
-    pub fn save(
-        &self,
-        profile_name: &str,
-        profile_path: &Path,
-        message: Option<&str>,
-    ) -> Result<Snapshot> {
-        if !profile_path.exists() {
-            return Err(DotAgentError::ProfileNotFound {
-                name: profile_name.to_string(),
-            });
-        }
-
-        let timestamp = Utc::now();
-        let id = timestamp.format("%Y%m%d_%H%M%S").to_string();
-
-        let snapshot_dir = self.snapshots_dir(profile_name).join(&id);
-        fs::create_dir_all(&snapshot_dir)?;
-
-        // Copy all files from profile to snapshot
-        let mut file_count = 0;
-        for entry in WalkDir::new(profile_path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-        {
-            let src = entry.path();
-
-            // Skip hidden files and common excludes
-            if let Some(name) = src.file_name() {
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with('.') || name_str == ".DS_Store" {
-                    continue;
-                }
-            }
-
-            if let Ok(relative) = src.strip_prefix(profile_path) {
-                let dst = snapshot_dir.join(relative);
-                if let Some(parent) = dst.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::copy(src, dst)?;
-                file_count += 1;
-            }
-        }
-
-        let snapshot = Snapshot {
-            id: id.clone(),
-            timestamp,
-            trigger: SnapshotTrigger::Manual,
-            message: message.map(String::from),
-            profiles_affected: vec![profile_name.to_string()],
-            file_count,
-        };
-
-        // Update manifest
-        let mut manifest = self.load_manifest(profile_name)?;
-        if manifest.target_path.is_empty() {
-            manifest.target_path = profile_path.to_string_lossy().to_string();
-        }
-        manifest.snapshots.push(snapshot.clone());
-        self.save_manifest(profile_name, &manifest)?;
-
-        Ok(snapshot)
-    }
-
-    /// List all snapshots for a profile
-    pub fn list(&self, profile_name: &str) -> Result<Vec<Snapshot>> {
-        let manifest = self.load_manifest(profile_name)?;
-        Ok(manifest.snapshots)
-    }
-
-    /// Get a specific snapshot
-    pub fn get(&self, profile_name: &str, id: &str) -> Result<Snapshot> {
-        let manifest = self.load_manifest(profile_name)?;
-        manifest
-            .snapshots
-            .into_iter()
-            .find(|s| s.id == id)
-            .ok_or_else(|| DotAgentError::SnapshotNotFound { id: id.to_string() })
-    }
-
-    /// Restore a snapshot to the profile directory
-    pub fn restore(
-        &self,
-        profile_name: &str,
-        profile_path: &Path,
-        id: &str,
-    ) -> Result<(usize, usize)> {
-        let _ = self.get(profile_name, id)?;
-
-        let snapshot_dir = self.snapshots_dir(profile_name).join(id);
-        if !snapshot_dir.exists() {
-            return Err(DotAgentError::SnapshotNotFound { id: id.to_string() });
-        }
-
-        // Clear profile directory
-        let mut removed = 0;
-        if profile_path.exists() {
-            for entry in WalkDir::new(profile_path)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file())
-            {
-                let path = entry.path();
-                // Skip hidden files
-                if path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().starts_with('.'))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                fs::remove_file(path)?;
-                removed += 1;
-            }
-            clean_empty_dirs(profile_path)?;
-        }
-
-        // Copy files from snapshot to profile
-        fs::create_dir_all(profile_path)?;
-        let mut restored = 0;
-        for entry in WalkDir::new(&snapshot_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-        {
-            let src = entry.path();
-            if let Ok(relative) = src.strip_prefix(&snapshot_dir) {
-                let dst = profile_path.join(relative);
-                if let Some(parent) = dst.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::copy(src, dst)?;
-                restored += 1;
-            }
-        }
-
-        Ok((removed, restored))
-    }
-
-    /// Compare snapshot with current profile state
-    pub fn diff(&self, profile_name: &str, profile_path: &Path, id: &str) -> Result<SnapshotDiff> {
-        let _ = self.get(profile_name, id)?;
-
-        let snapshot_dir = self.snapshots_dir(profile_name).join(id);
-        if !snapshot_dir.exists() {
-            return Err(DotAgentError::SnapshotNotFound { id: id.to_string() });
-        }
-
-        let mut diff = SnapshotDiff::default();
-
-        let snapshot_files = collect_files(&snapshot_dir)?;
-        let current_files = if profile_path.exists() {
-            collect_files(profile_path)?
-        } else {
-            HashMap::new()
-        };
-
-        for (path, snap_hash) in &snapshot_files {
-            match current_files.get(path) {
-                Some(curr_hash) if curr_hash == snap_hash => {
-                    diff.unchanged.push(path.clone());
-                }
-                Some(_) => {
-                    diff.modified.push(path.clone());
-                }
-                None => {
-                    diff.deleted.push(path.clone());
-                }
-            }
-        }
-
-        for path in current_files.keys() {
-            if !snapshot_files.contains_key(path) {
-                diff.added.push(path.clone());
-            }
-        }
-
-        diff.unchanged.sort();
-        diff.modified.sort();
-        diff.added.sort();
-        diff.deleted.sort();
-
-        Ok(diff)
-    }
-
-    /// Delete a snapshot
-    pub fn delete(&self, profile_name: &str, id: &str) -> Result<()> {
-        let _ = self.get(profile_name, id)?;
-
-        let snapshot_dir = self.snapshots_dir(profile_name).join(id);
-        if snapshot_dir.exists() {
-            fs::remove_dir_all(&snapshot_dir)?;
-        }
-
-        let mut manifest = self.load_manifest(profile_name)?;
-        manifest.snapshots.retain(|s| s.id != id);
-        self.save_manifest(profile_name, &manifest)?;
-
-        Ok(())
-    }
-
-    /// Prune old snapshots
-    pub fn prune(&self, profile_name: &str, keep: usize) -> Result<Vec<String>> {
-        let mut manifest = self.load_manifest(profile_name)?;
-
-        if manifest.snapshots.len() <= keep {
-            return Ok(vec![]);
-        }
-
-        manifest.snapshots.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-
-        let to_remove = manifest.snapshots.len() - keep;
-        let removed: Vec<Snapshot> = manifest.snapshots.drain(..to_remove).collect();
-
-        let mut deleted_ids = Vec::new();
-        for snap in &removed {
-            let snapshot_dir = self.snapshots_dir(profile_name).join(&snap.id);
-            if snapshot_dir.exists() {
-                fs::remove_dir_all(&snapshot_dir)?;
-            }
-            deleted_ids.push(snap.id.clone());
-        }
-
-        self.save_manifest(profile_name, &manifest)?;
-
-        Ok(deleted_ids)
-    }
 }

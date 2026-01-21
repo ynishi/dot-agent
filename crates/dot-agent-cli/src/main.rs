@@ -863,7 +863,7 @@ fn handle_profile_snapshot(
             println!();
             println!("Creating snapshot of profile '{}'...", profile.cyan());
 
-            let snapshot = snapshot_manager.save(&profile, &p.path, message.as_deref())?;
+            let snapshot = snapshot_manager.save_profile(&profile, &p.path, message.as_deref())?;
 
             println!();
             println!("{} {}", "Snapshot saved:".green(), snapshot.id.cyan());
@@ -876,7 +876,7 @@ fn handle_profile_snapshot(
         ProfileSnapshotAction::List { profile } => {
             let _ = profile_manager.get_profile(&profile)?;
 
-            let snapshots = snapshot_manager.list(&profile)?;
+            let snapshots = snapshot_manager.list_profile(&profile)?;
 
             if snapshots.is_empty() {
                 println!("No snapshots found for profile '{}'.", profile);
@@ -906,7 +906,7 @@ fn handle_profile_snapshot(
         }
         ProfileSnapshotAction::Restore { profile, id, force } => {
             let p = profile_manager.get_profile(&profile)?;
-            let snapshot = snapshot_manager.get(&profile, &id)?;
+            let snapshot = snapshot_manager.get_profile(&profile, &id)?;
 
             println!();
             println!("Restore snapshot {} for profile '{}'?", id.cyan(), profile);
@@ -931,7 +931,7 @@ fn handle_profile_snapshot(
                 }
             }
 
-            let (removed, restored) = snapshot_manager.restore(&profile, &p.path, &id)?;
+            let (removed, restored) = snapshot_manager.restore_profile(&profile, &p.path, &id)?;
 
             println!();
             println!("{}", "Snapshot restored!".green());
@@ -941,7 +941,7 @@ fn handle_profile_snapshot(
         ProfileSnapshotAction::Diff { profile, id } => {
             let p = profile_manager.get_profile(&profile)?;
 
-            let diff = snapshot_manager.diff(&profile, &p.path, &id)?;
+            let diff = snapshot_manager.diff_profile(&profile, &p.path, &id)?;
 
             println!();
             println!(
@@ -987,7 +987,7 @@ fn handle_profile_snapshot(
         }
         ProfileSnapshotAction::Delete { profile, id, force } => {
             let _ = profile_manager.get_profile(&profile)?;
-            let snapshot = snapshot_manager.get(&profile, &id)?;
+            let snapshot = snapshot_manager.get_profile(&profile, &id)?;
 
             if !force {
                 println!();
@@ -1011,7 +1011,7 @@ fn handle_profile_snapshot(
                 }
             }
 
-            snapshot_manager.delete(&profile, &id)?;
+            snapshot_manager.delete_profile(&profile, &id)?;
             println!();
             println!("{} snapshot {}", "Deleted:".red(), id);
         }
@@ -1022,7 +1022,7 @@ fn handle_profile_snapshot(
         } => {
             let _ = profile_manager.get_profile(&profile)?;
 
-            let snapshots = snapshot_manager.list(&profile)?;
+            let snapshots = snapshot_manager.list_profile(&profile)?;
             let to_delete = snapshots.len().saturating_sub(keep);
 
             if to_delete == 0 {
@@ -1054,7 +1054,7 @@ fn handle_profile_snapshot(
                 }
             }
 
-            let deleted = snapshot_manager.prune(&profile, keep)?;
+            let deleted = snapshot_manager.prune_profile(&profile, keep)?;
 
             println!();
             println!("{} {} snapshot(s)", "Pruned:".green(), deleted.len());
@@ -1242,7 +1242,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
             println!();
             println!("Creating snapshot of {}...", target_dir.display());
 
-            let snapshot = snapshot_manager.save(
+            let snapshot = snapshot_manager.save_target(
                 &target_dir,
                 SnapshotTrigger::Manual,
                 message.as_deref(),
@@ -1260,7 +1260,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
         SnapshotAction::List { path, global } => {
             let target_dir = installer.resolve_target(path.as_deref(), global)?;
 
-            let snapshots = snapshot_manager.list(&target_dir)?;
+            let snapshots = snapshot_manager.list_target(&target_dir)?;
 
             if snapshots.is_empty() {
                 println!("No snapshots found.");
@@ -1297,7 +1297,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
         } => {
             let target_dir = installer.resolve_target(path.as_deref(), global)?;
 
-            let snapshot = snapshot_manager.get(&target_dir, &id)?;
+            let snapshot = snapshot_manager.get_target(&target_dir, &id)?;
 
             println!();
             println!("Restore snapshot {}?", id.cyan());
@@ -1322,7 +1322,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
                 }
             }
 
-            let (removed, restored) = snapshot_manager.restore(&target_dir, &id)?;
+            let (removed, restored) = snapshot_manager.restore_target(&target_dir, &id)?;
 
             println!();
             println!("{}", "Snapshot restored!".green());
@@ -1332,7 +1332,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
         SnapshotAction::Diff { id, path, global } => {
             let target_dir = installer.resolve_target(path.as_deref(), global)?;
 
-            let diff = snapshot_manager.diff(&target_dir, &id)?;
+            let diff = snapshot_manager.diff_target(&target_dir, &id)?;
 
             println!();
             println!("Diff: snapshot {} vs current", id.cyan());
@@ -1380,7 +1380,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
         } => {
             let target_dir = installer.resolve_target(path.as_deref(), global)?;
 
-            let snapshot = snapshot_manager.get(&target_dir, &id)?;
+            let snapshot = snapshot_manager.get_target(&target_dir, &id)?;
 
             if !force {
                 println!();
@@ -1400,7 +1400,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
                 }
             }
 
-            snapshot_manager.delete(&target_dir, &id)?;
+            snapshot_manager.delete_target(&target_dir, &id)?;
             println!();
             println!("{} snapshot {}", "Deleted:".red(), id);
         }
@@ -1412,7 +1412,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
         } => {
             let target_dir = installer.resolve_target(path.as_deref(), global)?;
 
-            let snapshots = snapshot_manager.list(&target_dir)?;
+            let snapshots = snapshot_manager.list_target(&target_dir)?;
             let to_delete = snapshots.len().saturating_sub(keep);
 
             if to_delete == 0 {
@@ -1444,7 +1444,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
                 }
             }
 
-            let deleted = snapshot_manager.prune(&target_dir, keep)?;
+            let deleted = snapshot_manager.prune_target(&target_dir, keep)?;
 
             println!();
             println!("{} {} snapshot(s)", "Pruned:".green(), deleted.len());
@@ -1501,7 +1501,7 @@ fn handle_switch(
     if !no_snapshot && target_dir.exists() {
         println!();
         println!("Creating snapshot before switch...");
-        let snapshot = snapshot_manager.save(
+        let snapshot = snapshot_manager.save_target(
             &target_dir,
             SnapshotTrigger::PreInstall,
             Some(&format!("before switch to {}", profile_name)),
