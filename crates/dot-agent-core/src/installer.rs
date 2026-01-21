@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{DotAgentError, Result};
 use crate::metadata::{compute_file_hash, compute_hash, Metadata};
-use crate::profile::Profile;
+use crate::profile::{IgnoreConfig, Profile};
 
 const CLAUDE_MD: &str = "CLAUDE.md";
 const CLAUDE_DIR: &str = ".claude";
@@ -74,6 +74,7 @@ impl Installer {
     }
 
     /// Install a profile to target
+    #[allow(clippy::too_many_arguments)]
     pub fn install(
         &self,
         profile: &Profile,
@@ -81,6 +82,7 @@ impl Installer {
         force: bool,
         dry_run: bool,
         no_prefix: bool,
+        ignore_config: &IgnoreConfig,
         on_file: FileCallback<'_>,
     ) -> Result<InstallResult> {
         let mut result = InstallResult::default();
@@ -91,7 +93,7 @@ impl Installer {
             fs::create_dir_all(target)?;
         }
 
-        let files = profile.list_files()?;
+        let files = profile.list_files_with_config(ignore_config)?;
 
         for relative_path in files {
             let src = profile.path.join(&relative_path);
@@ -162,12 +164,17 @@ impl Installer {
     }
 
     /// Compare profile with installed files
-    pub fn diff(&self, profile: &Profile, target: &Path) -> Result<DiffResult> {
+    pub fn diff(
+        &self,
+        profile: &Profile,
+        target: &Path,
+        ignore_config: &IgnoreConfig,
+    ) -> Result<DiffResult> {
         let mut result = DiffResult::default();
 
         if !target.exists() {
             // All files are missing
-            for relative_path in profile.list_files()? {
+            for relative_path in profile.list_files_with_config(ignore_config)? {
                 let prefixed_path = prefix_path(&relative_path, &profile.name);
                 result.files.push(FileInfo {
                     relative_path: prefixed_path,
@@ -179,7 +186,7 @@ impl Installer {
         }
 
         let metadata = Metadata::load(target)?;
-        let profile_files = profile.list_files()?;
+        let profile_files = profile.list_files_with_config(ignore_config)?;
 
         // Build set of prefixed paths for comparison
         let prefixed_files: Vec<_> = profile_files
@@ -250,6 +257,7 @@ impl Installer {
         target: &Path,
         force: bool,
         dry_run: bool,
+        ignore_config: &IgnoreConfig,
         on_file: FileCallback<'_>,
     ) -> Result<(usize, usize)> {
         if !target.exists() {
@@ -257,7 +265,7 @@ impl Installer {
         }
 
         let mut metadata = Metadata::load(target)?.unwrap_or_else(|| Metadata::new(&self.base_dir));
-        let diff = self.diff(profile, target)?;
+        let diff = self.diff(profile, target, ignore_config)?;
 
         // Check for local modifications
         if !force {
@@ -335,6 +343,7 @@ impl Installer {
     }
 
     /// Upgrade profile files
+    #[allow(clippy::too_many_arguments)]
     pub fn upgrade(
         &self,
         profile: &Profile,
@@ -342,12 +351,14 @@ impl Installer {
         force: bool,
         dry_run: bool,
         no_prefix: bool,
+        ignore_config: &IgnoreConfig,
         on_file: FileCallback<'_>,
     ) -> Result<(usize, usize, usize, usize)> {
         // updated, new, skipped, unchanged
         if !target.exists() {
             // Just install everything
-            let result = self.install(profile, target, force, dry_run, no_prefix, on_file)?;
+            let result =
+                self.install(profile, target, force, dry_run, no_prefix, ignore_config, on_file)?;
             return Ok((0, result.installed, 0, 0));
         }
 
@@ -357,7 +368,7 @@ impl Installer {
         let mut skipped = 0;
         let mut unchanged = 0;
 
-        let files = profile.list_files()?;
+        let files = profile.list_files_with_config(ignore_config)?;
 
         for relative_path in files {
             let src = profile.path.join(&relative_path);

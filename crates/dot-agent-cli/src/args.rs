@@ -45,6 +45,22 @@ pub enum Commands {
         action: ProfileAction,
     },
 
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Search for skills/profiles on GitHub
+    Search {
+        /// Search query (e.g., "rust tdd", "nextjs")
+        query: String,
+
+        /// Maximum results to show
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -76,6 +92,14 @@ pub enum Commands {
         /// Don't add profile prefix to files (stop on conflict)
         #[arg(long)]
         no_prefix: bool,
+
+        /// Include directories that are excluded by default (e.g., --include=.git)
+        #[arg(long, value_name = "DIR")]
+        include: Vec<String>,
+
+        /// Exclude additional directories (e.g., --exclude=node_modules)
+        #[arg(long, value_name = "DIR")]
+        exclude: Vec<String>,
     },
 
     /// Upgrade installed profile to latest
@@ -102,6 +126,14 @@ pub enum Commands {
         /// Don't add profile prefix to files
         #[arg(long)]
         no_prefix: bool,
+
+        /// Include directories that are excluded by default (e.g., --include=.git)
+        #[arg(long, value_name = "DIR")]
+        include: Vec<String>,
+
+        /// Exclude additional directories (e.g., --exclude=node_modules)
+        #[arg(long, value_name = "DIR")]
+        exclude: Vec<String>,
     },
 
     /// Show diff between profile and installed files
@@ -116,6 +148,14 @@ pub enum Commands {
         /// Diff ~/.claude (global)
         #[arg(short, long)]
         global: bool,
+
+        /// Include directories that are excluded by default (e.g., --include=.git)
+        #[arg(long, value_name = "DIR")]
+        include: Vec<String>,
+
+        /// Exclude additional directories (e.g., --exclude=node_modules)
+        #[arg(long, value_name = "DIR")]
+        exclude: Vec<String>,
     },
 
     /// Remove installed profile
@@ -138,6 +178,14 @@ pub enum Commands {
         /// Dry run
         #[arg(short, long)]
         dry_run: bool,
+
+        /// Include directories that are excluded by default (e.g., --include=.git)
+        #[arg(long, value_name = "DIR")]
+        include: Vec<String>,
+
+        /// Exclude additional directories (e.g., --exclude=node_modules)
+        #[arg(long, value_name = "DIR")]
+        exclude: Vec<String>,
     },
 
     /// Show installation status
@@ -509,4 +557,31 @@ pub enum RuleAction {
         #[arg(short, long)]
         dry_run: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Get a config value
+    Get {
+        /// Config key (e.g., profile.exclude)
+        key: String,
+    },
+
+    /// Set a config value
+    Set {
+        /// Config key (e.g., profile.exclude)
+        key: String,
+
+        /// Value to set (e.g., ".git,node_modules" or "[.git, node_modules]")
+        value: String,
+    },
+
+    /// List all config values
+    List,
+
+    /// Show config file path
+    Path,
+
+    /// Initialize config file with defaults
+    Init,
 }

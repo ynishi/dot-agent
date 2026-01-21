@@ -25,6 +25,7 @@ clap.workspace = true
 clap_complete.workspace = true
 colored.workspace = true
 dirs.workspace = true
+serde_json.workspace = true
 
 # GUI dependencies (optional)
 eframe = { workspace = true, optional = true }

@@ -62,6 +62,12 @@ pub enum DotAgentError {
 
     #[error("Snapshot not found: {id}")]
     SnapshotNotFound { id: String },
+
+    #[error("Config parse error in {path}: {message}")]
+    ConfigParse { path: PathBuf, message: String },
+
+    #[error("Config key not found: {key}")]
+    ConfigKeyNotFound { key: String },
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -80,6 +86,8 @@ impl DotAgentError {
             Self::ClaudeNotFound => 10,
             Self::ClaudeExecutionFailed { .. } => 11,
             Self::SnapshotNotFound { .. } => 12,
+            Self::ConfigParse { .. } => 13,
+            Self::ConfigKeyNotFound { .. } => 14,
             _ => 1,
         }
     }

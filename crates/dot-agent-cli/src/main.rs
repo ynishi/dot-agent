@@ -6,13 +6,14 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use colored::Colorize;
 
+use dot_agent_core::config::Config;
 use dot_agent_core::installer::{FileStatus, Installer};
 use dot_agent_core::metadata::Metadata;
-use dot_agent_core::profile::ProfileManager;
+use dot_agent_core::profile::{IgnoreConfig, ProfileManager};
 use dot_agent_core::{DotAgentError, Result};
 
 mod args;
-use args::{Cli, Commands, ProfileAction, ProfileSnapshotAction, RuleAction, Shell, SnapshotAction};
+use args::{Cli, Commands, ConfigAction, ProfileAction, ProfileSnapshotAction, RuleAction, Shell, SnapshotAction};
 
 #[cfg(feature = "gui")]
 mod gui;
@@ -45,6 +46,8 @@ fn main() -> ExitCode {
 
     let result = match cli.command {
         Some(Commands::Profile { action }) => handle_profile(action, &base_dir),
+        Some(Commands::Config { action }) => handle_config(action, &base_dir),
+        Some(Commands::Search { query, limit }) => handle_search(&query, limit),
         Some(Commands::Completions { shell }) => {
             handle_completions(shell);
             Ok(())
@@ -56,6 +59,8 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            include,
+            exclude,
         }) => handle_install(
             &base_dir,
             &profile,
@@ -64,6 +69,7 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            build_ignore_config(&base_dir, &include, &exclude),
         ),
         Some(Commands::Upgrade {
             profile,
@@ -72,6 +78,8 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            include,
+            exclude,
         }) => handle_upgrade(
             &base_dir,
             &profile,
@@ -80,18 +88,29 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            build_ignore_config(&base_dir, &include, &exclude),
         ),
         Some(Commands::Diff {
             profile,
             path,
             global,
-        }) => handle_diff(&base_dir, &profile, path.as_deref(), global),
+            include,
+            exclude,
+        }) => handle_diff(
+            &base_dir,
+            &profile,
+            path.as_deref(),
+            global,
+            build_ignore_config(&base_dir, &include, &exclude),
+        ),
         Some(Commands::Remove {
             profile,
             path,
             global,
             force,
             dry_run,
+            include,
+            exclude,
         }) => handle_remove(
             &base_dir,
             &profile,
@@ -99,6 +118,7 @@ fn main() -> ExitCode {
             global,
             force,
             dry_run,
+            build_ignore_config(&base_dir, &include, &exclude),
         ),
         Some(Commands::Status { path, global }) => {
             handle_status(&base_dir, path.as_deref(), global)
@@ -164,6 +184,175 @@ fn resolve_base_dir(cli_base: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".dot-agent"))
 }
 
+fn handle_search(query: &str, limit: usize) -> Result<()> {
+    use std::process::Command;
+
+    // Expand query with related keywords (pick best match)
+    let query_lower = query.to_lowercase();
+    let has_claude = query_lower.contains("claude");
+    let has_skills = query_lower.contains("skills") || query_lower.contains("skill");
+
+    let search_query = match (has_claude, has_skills) {
+        (true, true) => query.to_string(),
+        (true, false) => format!("{} skills", query),
+        (false, true) => format!("{} claude", query),
+        (false, false) => format!("{} claude skills", query),
+    };
+
+    let output = Command::new("gh")
+        .args([
+            "search",
+            "repos",
+            &search_query,
+            "--limit",
+            &limit.to_string(),
+            "--json",
+            "name,owner,description,url,stargazersCount",
+        ])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let json: serde_json::Value =
+                serde_json::from_slice(&output.stdout).unwrap_or_default();
+
+            if let Some(repos) = json.as_array() {
+                if repos.is_empty() {
+                    println!("No results found for: {}", query);
+                    return Ok(());
+                }
+
+                println!();
+                println!("{}", "Search Results:".cyan().bold());
+                println!();
+
+                for (i, repo) in repos.iter().enumerate() {
+                    let name = repo["name"].as_str().unwrap_or("?");
+                    let owner = repo["owner"]["login"].as_str().unwrap_or("?");
+                    let desc = repo["description"]
+                        .as_str()
+                        .unwrap_or("No description")
+                        .chars()
+                        .take(60)
+                        .collect::<String>();
+                    let stars = repo["stargazersCount"].as_u64().unwrap_or(0);
+                    let url = repo["url"].as_str().unwrap_or("");
+
+                    println!(
+                        "{}. {}/{} {} {}",
+                        (i + 1).to_string().bold(),
+                        owner.yellow(),
+                        name.cyan(),
+                        format!("★{}", stars).yellow(),
+                        if desc.len() >= 60 {
+                            format!("{}...", desc)
+                        } else {
+                            desc
+                        }
+                    );
+                    println!("   {}", url.dimmed());
+                    println!();
+                }
+
+                println!("{}", "To import:".dimmed());
+                println!(
+                    "  {}",
+                    "dot-agent profile import <url> --name <profile-name>".dimmed()
+                );
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("gh: command not found") || stderr.contains("not found") {
+                eprintln!(
+                    "{} GitHub CLI (gh) not found. Install: {}",
+                    "[ERROR]".red().bold(),
+                    "brew install gh".cyan()
+                );
+            } else {
+                eprintln!("{} {}", "[ERROR]".red().bold(), stderr);
+            }
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "{} GitHub CLI (gh) not found. Install: {}",
+                    "[ERROR]".red().bold(),
+                    "brew install gh".cyan()
+                );
+            } else {
+                return Err(e.into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Build IgnoreConfig from global config + CLI options
+/// Priority: CLI options > config file > defaults
+fn build_ignore_config(base_dir: &Path, include: &[String], exclude: &[String]) -> IgnoreConfig {
+    // Start with config file settings (or defaults if no config)
+    let mut config = Config::load(base_dir)
+        .map(|c| c.to_ignore_config())
+        .unwrap_or_else(|_| IgnoreConfig::with_defaults());
+
+    // CLI options override/extend config
+    for dir in include {
+        if !config.included_dirs.contains(dir) {
+            config.included_dirs.push(dir.clone());
+        }
+    }
+
+    for dir in exclude {
+        if !config.excluded_dirs.contains(dir) {
+            config.excluded_dirs.push(dir.clone());
+        }
+    }
+
+    config
+}
+
+fn handle_config(action: ConfigAction, base_dir: &Path) -> Result<()> {
+    match action {
+        ConfigAction::Get { key } => {
+            let config = Config::load(base_dir)?;
+            match config.get(&key) {
+                Some(value) => {
+                    println!("{}", value);
+                }
+                None => {
+                    return Err(DotAgentError::ConfigKeyNotFound { key });
+                }
+            }
+        }
+        ConfigAction::Set { key, value } => {
+            let mut config = Config::load(base_dir)?;
+            config.set(&key, &value)?;
+            config.save(base_dir)?;
+            println!("{} {} = {}", "Set:".green(), key, value);
+        }
+        ConfigAction::List => {
+            let config = Config::load(base_dir)?;
+            println!();
+            for (key, value) in config.list() {
+                println!("{} = {}", key.cyan(), value);
+            }
+            println!();
+        }
+        ConfigAction::Path => {
+            let path = Config::path(base_dir);
+            println!("{}", path.display());
+        }
+        ConfigAction::Init => {
+            let path = Config::init(base_dir)?;
+            println!("{} {}", "Initialized:".green(), path.display());
+        }
+    }
+
+    Ok(())
+}
+
 fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
 
@@ -173,21 +362,21 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
             println!();
             println!("{} {}", "Created:".green(), profile.path.display());
             println!();
+            println!("Structure:");
+            println!("  {}/", profile.path.display());
+            println!("  ├── CLAUDE.md      # Project instructions");
+            println!("  ├── agents/        # Custom agents");
+            println!("  ├── commands/      # Slash commands");
+            println!("  ├── hooks/         # Event hooks");
+            println!("  ├── plugins/       # MCP plugins");
+            println!("  ├── rules/         # Coding rules");
+            println!("  └── skills/        # Reusable skills");
+            println!();
             println!("Next steps:");
+            println!("  1. Edit CLAUDE.md with your project instructions");
+            println!("  2. Add agents/rules/skills as needed");
             println!(
-                "  1. Add skills:       mkdir {}/skills/",
-                profile.path.display()
-            );
-            println!(
-                "  2. Add commands:     mkdir {}/commands/",
-                profile.path.display()
-            );
-            println!(
-                "  3. Add CLAUDE.md:    touch {}/CLAUDE.md",
-                profile.path.display()
-            );
-            println!(
-                "  4. Install to project: dot-agent install -p {} ~/your-project",
+                "  3. Install: dot-agent install {}",
                 name
             );
         }
@@ -250,6 +439,7 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_install(
     base_dir: &Path,
     profile_name: &str,
@@ -258,6 +448,7 @@ fn handle_install(
     force: bool,
     dry_run: bool,
     no_prefix: bool,
+    ignore_config: IgnoreConfig,
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -294,6 +485,7 @@ fn handle_install(
         force,
         dry_run,
         no_prefix,
+        &ignore_config,
         Some(&on_file),
     )?;
 
@@ -318,6 +510,7 @@ fn handle_install(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_upgrade(
     base_dir: &Path,
     profile_name: &str,
@@ -326,6 +519,7 @@ fn handle_upgrade(
     force: bool,
     dry_run: bool,
     no_prefix: bool,
+    ignore_config: IgnoreConfig,
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -360,6 +554,7 @@ fn handle_upgrade(
         force,
         dry_run,
         no_prefix,
+        &ignore_config,
         Some(&on_file),
     )?;
 
@@ -388,6 +583,7 @@ fn handle_diff(
     profile_name: &str,
     target: Option<&Path>,
     global: bool,
+    ignore_config: IgnoreConfig,
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -400,7 +596,7 @@ fn handle_diff(
     println!("Target: {}", target_dir.display());
     println!();
 
-    let result = installer.diff(&profile, &target_dir)?;
+    let result = installer.diff(&profile, &target_dir, &ignore_config)?;
 
     for file in &result.files {
         let status_str = match file.status {
@@ -434,6 +630,7 @@ fn handle_remove(
     global: bool,
     force: bool,
     dry_run: bool,
+    ignore_config: IgnoreConfig,
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -459,8 +656,14 @@ fn handle_remove(
         println!("  {} {}", status_str, path);
     };
 
-    let (removed, kept) =
-        installer.remove(&profile, &target_dir, force, dry_run, Some(&on_file))?;
+    let (removed, kept) = installer.remove(
+        &profile,
+        &target_dir,
+        force,
+        dry_run,
+        &ignore_config,
+        Some(&on_file),
+    )?;
 
     println!();
     println!("Summary:");
@@ -1487,9 +1690,12 @@ fn handle_switch(
         .map(|m| m.installed.profiles.clone())
         .unwrap_or_default();
 
+    // Use default ignore config for switch operation
+    let ignore_config = IgnoreConfig::with_defaults();
+
     if current_profiles.is_empty() {
         println!("No profiles currently installed. Installing {}...", profile_name);
-        let result = installer.install(&new_profile, &target_dir, force, false, false, None)?;
+        let result = installer.install(&new_profile, &target_dir, force, false, false, &ignore_config, None)?;
         println!();
         println!("{} Installed {} files.", "Done:".green(), result.installed);
         return Ok(());
@@ -1515,7 +1721,7 @@ fn handle_switch(
     println!("Removing current profiles...");
     for current_name in &current_profiles {
         if let Ok(current_profile) = profile_manager.get_profile(current_name) {
-            match installer.remove(&current_profile, &target_dir, force, false, None) {
+            match installer.remove(&current_profile, &target_dir, force, false, &ignore_config, None) {
                 Ok((removed, _)) => {
                     println!("  {} {} ({} files)", "Removed:".red(), current_name, removed);
                 }
@@ -1529,7 +1735,7 @@ fn handle_switch(
     // Install new profile
     println!();
     println!("Installing {}...", profile_name);
-    let result = installer.install(&new_profile, &target_dir, force, false, false, None)?;
+    let result = installer.install(&new_profile, &target_dir, force, false, false, &ignore_config, None)?;
 
     println!();
     println!("{}", "Switch complete!".green());
