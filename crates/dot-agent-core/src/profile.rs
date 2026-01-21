@@ -25,7 +25,10 @@ impl IgnoreConfig {
     /// Create with default exclusions (.git)
     pub fn with_defaults() -> Self {
         Self {
-            excluded_dirs: DEFAULT_EXCLUDED_DIRS.iter().map(|s| s.to_string()).collect(),
+            excluded_dirs: DEFAULT_EXCLUDED_DIRS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             included_dirs: Vec::new(),
         }
     }
@@ -451,4 +454,3 @@ mod tests {
         assert!(config.should_ignore(Path::new(".DS_Store")));
     }
 }
-

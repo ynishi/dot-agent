@@ -103,8 +103,7 @@ impl eframe::App for DotAgentApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("⟳ Refresh").clicked() {
                         self.refresh();
-                        self.status_message =
-                            Some(("Refreshed".to_string(), MessageType::Info));
+                        self.status_message = Some(("Refreshed".to_string(), MessageType::Info));
                     }
                 });
             });
@@ -317,9 +316,7 @@ impl DotAgentApp {
                         ui.label("Source Profile:");
                         egui::ComboBox::from_id_salt("apply_profile")
                             .selected_text(
-                                self.apply_profile
-                                    .as_deref()
-                                    .unwrap_or("Select profile..."),
+                                self.apply_profile.as_deref().unwrap_or("Select profile..."),
                             )
                             .show_ui(ui, |ui| {
                                 if let Ok(profiles) = self.profile_manager.list_profiles() {
@@ -382,8 +379,14 @@ impl DotAgentApp {
 
         match installer.resolve_target(target.as_deref(), self.install_global) {
             Ok(target_dir) => {
-                match installer.install(profile, &target_dir, self.force, false, self.no_prefix, None)
-                {
+                match installer.install(
+                    profile,
+                    &target_dir,
+                    self.force,
+                    false,
+                    self.no_prefix,
+                    None,
+                ) {
                     Ok(result) => {
                         self.status_message = Some((
                             format!(
@@ -446,8 +449,7 @@ impl DotAgentApp {
         let profile = match self.profile_manager.get_profile(profile_name) {
             Ok(p) => p,
             Err(e) => {
-                self.status_message =
-                    Some((format!("Profile error: {e}"), MessageType::Error));
+                self.status_message = Some((format!("Profile error: {e}"), MessageType::Error));
                 return;
             }
         };

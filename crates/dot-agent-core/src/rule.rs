@@ -30,7 +30,8 @@ impl Rule {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Err(DotAgentError::RuleNotFound {
-                name: path.file_stem()
+                name: path
+                    .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default(),
             });
@@ -277,9 +278,9 @@ Only output file changes. No explanations needed.
         }
 
         // Copy base profile to new location
-        let new_profile = self
-            .profile_manager
-            .import_profile(&profile.path, &new_profile_name, false)?;
+        let new_profile =
+            self.profile_manager
+                .import_profile(&profile.path, &new_profile_name, false)?;
 
         // Generate prompt and execute AI
         let prompt = self.generate_prompt(profile)?;
@@ -301,11 +302,7 @@ Only output file changes. No explanations needed.
 // ============================================================================
 
 /// Extract a rule from an existing profile using AI.
-pub fn extract_rule(
-    profile: &Profile,
-    rule_name: &str,
-    manager: &RuleManager,
-) -> Result<Rule> {
+pub fn extract_rule(profile: &Profile, rule_name: &str, manager: &RuleManager) -> Result<Rule> {
     if !check_claude_cli() {
         return Err(DotAgentError::ClaudeNotFound);
     }
@@ -363,11 +360,7 @@ Output ONLY the rule content in markdown format. Start with a heading.
 }
 
 /// Generate a rule from natural language instruction.
-pub fn generate_rule(
-    instruction: &str,
-    rule_name: &str,
-    manager: &RuleManager,
-) -> Result<Rule> {
+pub fn generate_rule(instruction: &str, rule_name: &str, manager: &RuleManager) -> Result<Rule> {
     if !check_claude_cli() {
         return Err(DotAgentError::ClaudeNotFound);
     }
@@ -423,23 +416,25 @@ fn execute_claude(working_dir: &Path, prompt: &str) -> Result<String> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| DotAgentError::ClaudeExecutionFailed {
-        message: format!("Failed to spawn claude: {}", e),
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| DotAgentError::ClaudeExecutionFailed {
+            message: format!("Failed to spawn claude: {}", e),
+        })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(prompt.as_bytes()).map_err(|e| {
-            DotAgentError::ClaudeExecutionFailed {
+        stdin
+            .write_all(prompt.as_bytes())
+            .map_err(|e| DotAgentError::ClaudeExecutionFailed {
                 message: format!("Failed to write prompt: {}", e),
-            }
-        })?;
+            })?;
     }
 
-    let output = child.wait_with_output().map_err(|e| {
-        DotAgentError::ClaudeExecutionFailed {
+    let output = child
+        .wait_with_output()
+        .map_err(|e| DotAgentError::ClaudeExecutionFailed {
             message: format!("Execution failed: {}", e),
-        }
-    })?;
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -617,6 +612,9 @@ mod tests {
 
         manager.create("test").unwrap();
         let result = manager.create("test");
-        assert!(matches!(result, Err(DotAgentError::RuleAlreadyExists { .. })));
+        assert!(matches!(
+            result,
+            Err(DotAgentError::RuleAlreadyExists { .. })
+        ));
     }
 }

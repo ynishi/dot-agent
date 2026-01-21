@@ -13,7 +13,10 @@ use dot_agent_core::profile::{IgnoreConfig, ProfileManager};
 use dot_agent_core::{DotAgentError, Result};
 
 mod args;
-use args::{Cli, Commands, ConfigAction, ProfileAction, ProfileSnapshotAction, RuleAction, Shell, SnapshotAction};
+use args::{
+    Cli, Commands, ConfigAction, ProfileAction, ProfileSnapshotAction, RuleAction, Shell,
+    SnapshotAction,
+};
 
 #[cfg(feature = "gui")]
 mod gui;
@@ -142,7 +145,14 @@ fn main() -> ExitCode {
             global,
             no_snapshot,
             force,
-        }) => handle_switch(&base_dir, &profile, path.as_deref(), global, no_snapshot, force),
+        }) => handle_switch(
+            &base_dir,
+            &profile,
+            path.as_deref(),
+            global,
+            no_snapshot,
+            force,
+        ),
         None => {
             Cli::command().print_help().ok();
             Ok(())
@@ -375,10 +385,7 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
             println!("Next steps:");
             println!("  1. Edit CLAUDE.md with your project instructions");
             println!("  2. Add agents/rules/skills as needed");
-            println!(
-                "  3. Install: dot-agent install {}",
-                name
-            );
+            println!("  3. Install: dot-agent install {}", name);
         }
         ProfileAction::List => {
             let profiles = manager.list_profiles()?;
@@ -832,12 +839,7 @@ fn handle_copy(base_dir: &Path, source: &str, dest: &str, force: bool) -> Result
     let profile = manager.copy_profile(source, dest, force)?;
 
     println!();
-    println!(
-        "{} {} -> {}",
-        "Copied:".green(),
-        source.cyan(),
-        dest.cyan()
-    );
+    println!("{} {} -> {}", "Copied:".green(), source.cyan(), dest.cyan());
     println!("  Path: {}", profile.path.display());
     println!();
     println!("Contents: {}", profile.contents_summary());
@@ -1194,11 +1196,7 @@ fn handle_profile_snapshot(
 
             if !force {
                 println!();
-                println!(
-                    "Delete snapshot {} for profile '{}'?",
-                    id.yellow(),
-                    profile
-                );
+                println!("Delete snapshot {} for profile '{}'?", id.yellow(), profile);
                 println!("  Time: {}", snapshot.display_time());
                 println!("  Files: {}", snapshot.file_count);
                 println!();
@@ -1485,7 +1483,10 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
                     snap.file_count
                 );
                 if !snap.profiles_affected.is_empty() {
-                    println!("    Profiles: {}", snap.profiles_affected.join(", ").dimmed());
+                    println!(
+                        "    Profiles: {}",
+                        snap.profiles_affected.join(", ").dimmed()
+                    );
                 }
                 if let Some(msg) = &snap.message {
                     println!("    {}", msg.dimmed());
@@ -1694,8 +1695,19 @@ fn handle_switch(
     let ignore_config = IgnoreConfig::with_defaults();
 
     if current_profiles.is_empty() {
-        println!("No profiles currently installed. Installing {}...", profile_name);
-        let result = installer.install(&new_profile, &target_dir, force, false, false, &ignore_config, None)?;
+        println!(
+            "No profiles currently installed. Installing {}...",
+            profile_name
+        );
+        let result = installer.install(
+            &new_profile,
+            &target_dir,
+            force,
+            false,
+            false,
+            &ignore_config,
+            None,
+        )?;
         println!();
         println!("{} Installed {} files.", "Done:".green(), result.installed);
         return Ok(());
@@ -1713,7 +1725,11 @@ fn handle_switch(
             Some(&format!("before switch to {}", profile_name)),
             &[profile_name.to_string()],
         )?;
-        println!("  Saved: {} ({} files)", snapshot.id.cyan(), snapshot.file_count);
+        println!(
+            "  Saved: {} ({} files)",
+            snapshot.id.cyan(),
+            snapshot.file_count
+        );
     }
 
     // Remove current profiles
@@ -1721,9 +1737,21 @@ fn handle_switch(
     println!("Removing current profiles...");
     for current_name in &current_profiles {
         if let Ok(current_profile) = profile_manager.get_profile(current_name) {
-            match installer.remove(&current_profile, &target_dir, force, false, &ignore_config, None) {
+            match installer.remove(
+                &current_profile,
+                &target_dir,
+                force,
+                false,
+                &ignore_config,
+                None,
+            ) {
                 Ok((removed, _)) => {
-                    println!("  {} {} ({} files)", "Removed:".red(), current_name, removed);
+                    println!(
+                        "  {} {} ({} files)",
+                        "Removed:".red(),
+                        current_name,
+                        removed
+                    );
                 }
                 Err(e) => {
                     println!("  {} removing {}: {}", "Warning:".yellow(), current_name, e);
@@ -1735,7 +1763,15 @@ fn handle_switch(
     // Install new profile
     println!();
     println!("Installing {}...", profile_name);
-    let result = installer.install(&new_profile, &target_dir, force, false, false, &ignore_config, None)?;
+    let result = installer.install(
+        &new_profile,
+        &target_dir,
+        force,
+        false,
+        false,
+        &ignore_config,
+        None,
+    )?;
 
     println!();
     println!("{}", "Switch complete!".green());

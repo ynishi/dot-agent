@@ -357,8 +357,15 @@ impl Installer {
         // updated, new, skipped, unchanged
         if !target.exists() {
             // Just install everything
-            let result =
-                self.install(profile, target, force, dry_run, no_prefix, ignore_config, on_file)?;
+            let result = self.install(
+                profile,
+                target,
+                force,
+                dry_run,
+                no_prefix,
+                ignore_config,
+                on_file,
+            )?;
             return Ok((0, result.installed, 0, 0));
         }
 

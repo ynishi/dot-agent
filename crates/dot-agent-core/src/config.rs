@@ -44,7 +44,10 @@ pub struct ProfileConfig {
 }
 
 fn default_exclude() -> Vec<String> {
-    DEFAULT_EXCLUDED_DIRS.iter().map(|s| s.to_string()).collect()
+    DEFAULT_EXCLUDED_DIRS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 impl Default for ProfileConfig {
@@ -133,8 +136,14 @@ impl Config {
     /// List all config keys with their current values
     pub fn list(&self) -> Vec<(String, String)> {
         vec![
-            ("profile.exclude".to_string(), format!("{:?}", self.profile.exclude)),
-            ("profile.include".to_string(), format!("{:?}", self.profile.include)),
+            (
+                "profile.exclude".to_string(),
+                format!("{:?}", self.profile.exclude),
+            ),
+            (
+                "profile.include".to_string(),
+                format!("{:?}", self.profile.include),
+            ),
         ]
     }
 
