@@ -405,6 +405,72 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
                 println!();
             }
         }
+        ProfileAction::Show { name } => {
+            let profile = manager.get_profile(&name)?;
+
+            println!();
+            println!("Profile: {}", profile.name.cyan().bold());
+            println!("Path: {}", profile.path.display());
+            println!();
+
+            // Group files by directory
+            let files = profile.list_files()?;
+            let mut grouped: std::collections::BTreeMap<String, Vec<(PathBuf, usize, usize)>> =
+                std::collections::BTreeMap::new();
+
+            let mut total_lines = 0usize;
+            let mut total_chars = 0usize;
+
+            for file in &files {
+                let full_path = profile.path.join(file);
+                let (lines, chars) = if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    (content.lines().count(), content.len())
+                } else {
+                    (0, 0)
+                };
+                total_lines += lines;
+                total_chars += chars;
+
+                let category = file
+                    .components()
+                    .next()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .unwrap_or_else(|| "(root)".to_string());
+
+                grouped
+                    .entry(category)
+                    .or_default()
+                    .push((file.clone(), lines, chars));
+            }
+
+            // Display grouped files
+            for (category, files) in &grouped {
+                let cat_lines: usize = files.iter().map(|(_, l, _)| l).sum();
+                let cat_chars: usize = files.iter().map(|(_, _, c)| c).sum();
+                println!(
+                    "{} ({} files, {} lines, {} chars)",
+                    category.cyan().bold(),
+                    files.len(),
+                    cat_lines,
+                    cat_chars
+                );
+                for (file, lines, chars) in files {
+                    let file_name = file
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    println!("  {} ({} lines, {} chars)", file_name, lines, chars);
+                }
+                println!();
+            }
+
+            println!(
+                "Total: {} files, {} lines, {} chars",
+                files.len(),
+                total_lines,
+                total_chars
+            );
+        }
         ProfileAction::Remove { name, force } => {
             let profile = manager.get_profile(&name)?;
 
@@ -1369,14 +1435,30 @@ fn handle_rule(action: RuleAction, base_dir: &Path) -> Result<()> {
             println!();
             println!("Generating rule from instruction...");
             println!("  \"{}\"", instruction.cyan());
+            if name.is_none() {
+                println!("  (name will be auto-generated)");
+            }
             println!();
 
-            let rule = generate_rule(&instruction, &name, &manager)?;
+            let rule = generate_rule(&instruction, name.as_deref(), &manager)?;
 
             println!("{} {}", "Created:".green(), rule.path.display());
+            println!("  Name: {}", rule.name.cyan());
             println!();
             println!("The AI has generated a customization rule.");
             println!("Review and edit: {}", rule.path.display());
+        }
+        RuleAction::Rename { name, new_name } => {
+            let rule = manager.rename(&name, &new_name)?;
+
+            println!();
+            println!(
+                "{} '{}' -> '{}'",
+                "Renamed:".green(),
+                name.yellow(),
+                rule.name.cyan()
+            );
+            println!("  Path: {}", rule.path.display());
         }
         RuleAction::Apply {
             profile,

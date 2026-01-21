@@ -155,6 +155,28 @@ impl RuleManager {
         Ok(())
     }
 
+    /// Rename a rule.
+    pub fn rename(&self, name: &str, new_name: &str) -> Result<Rule> {
+        validate_name(new_name)?;
+
+        let old_path = self.rule_path(name);
+        if !old_path.exists() {
+            return Err(DotAgentError::RuleNotFound {
+                name: name.to_string(),
+            });
+        }
+
+        let new_path = self.rule_path(new_name);
+        if new_path.exists() {
+            return Err(DotAgentError::RuleAlreadyExists {
+                name: new_name.to_string(),
+            });
+        }
+
+        fs::rename(&old_path, &new_path)?;
+        Rule::load(&new_path)
+    }
+
     /// Update rule content.
     pub fn update(&self, name: &str, content: &str) -> Result<Rule> {
         let path = self.rule_path(name);
@@ -360,13 +382,23 @@ Output ONLY the rule content in markdown format. Start with a heading.
 }
 
 /// Generate a rule from natural language instruction.
-pub fn generate_rule(instruction: &str, rule_name: &str, manager: &RuleManager) -> Result<Rule> {
+/// If `rule_name` is None, the AI will generate a suitable name.
+pub fn generate_rule(
+    instruction: &str,
+    rule_name: Option<&str>,
+    manager: &RuleManager,
+) -> Result<Rule> {
     if !check_claude_cli() {
         return Err(DotAgentError::ClaudeNotFound);
     }
 
-    let generate_prompt = format!(
-        r##"Create a customization rule based on this instruction:
+    let rules_dir = manager.rules_dir();
+    fs::create_dir_all(&rules_dir)?;
+
+    let (final_name, generated_content) = match rule_name {
+        Some(name) => {
+            let prompt = format!(
+                r##"Create a customization rule based on this instruction:
 
 "{}"
 
@@ -379,18 +411,71 @@ Output a markdown document that includes:
 
 Start with a heading like "# {} Customization Rule"
 "##,
-        instruction, rule_name
-    );
+                instruction, name
+            );
+            let content = execute_claude(&rules_dir, &prompt)?;
+            (name.to_string(), content)
+        }
+        None => {
+            let prompt = format!(
+                r##"Create a customization rule based on this instruction:
 
-    let rules_dir = manager.rules_dir();
-    fs::create_dir_all(&rules_dir)?;
+"{}"
 
-    let generated_content = execute_claude(&rules_dir, &generate_prompt)?;
+The rule will be used to customize Claude Code configuration profiles.
 
-    let rule_path = manager.rules_dir().join(format!("{}.md", rule_name));
+IMPORTANT: On the FIRST line, output a suggested rule name in this exact format:
+NAME: <kebab-case-name>
+
+The name should be:
+- Lowercase kebab-case (e.g., "rust-optimization", "python-style")
+- Short and descriptive (2-4 words)
+- Based on the instruction content
+
+Then output a markdown document that includes:
+1. Clear section headings
+2. Specific patterns or conventions to follow
+3. Any recommended libraries, tools, or configurations
+"##,
+                instruction
+            );
+            let content = execute_claude(&rules_dir, &prompt)?;
+            let (name, content) = parse_name_from_output(&content)?;
+            (name, content)
+        }
+    };
+
+    let rule_path = rules_dir.join(format!("{}.md", final_name));
     fs::write(&rule_path, &generated_content)?;
 
     Rule::load(&rule_path)
+}
+
+/// Parse NAME: line from AI output and return (name, remaining_content)
+fn parse_name_from_output(output: &str) -> Result<(String, String)> {
+    let mut lines = output.lines();
+
+    // Find NAME: line
+    for line in lines.by_ref() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix("NAME:") {
+            let name = name.trim().to_lowercase().replace(' ', "-");
+            // Validate name
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return Err(DotAgentError::RuleNotFound {
+                    name: "AI generated invalid rule name".to_string(),
+                });
+            }
+            // Collect remaining content
+            let remaining: String = lines.collect::<Vec<_>>().join("\n");
+            let content = remaining.trim_start().to_string();
+            return Ok((name, content));
+        }
+    }
+
+    Err(DotAgentError::RuleNotFound {
+        name: "AI did not generate NAME: line".to_string(),
+    })
 }
 
 // ============================================================================

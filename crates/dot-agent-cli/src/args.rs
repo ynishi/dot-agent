@@ -374,6 +374,12 @@ pub enum ProfileAction {
     /// List all profiles
     List,
 
+    /// Show profile details
+    Show {
+        /// Profile name
+        name: String,
+    },
+
     /// Remove a profile
     Remove {
         /// Profile name
@@ -534,9 +540,18 @@ pub enum RuleAction {
         /// Natural language instruction (e.g., "Rust用にして")
         instruction: String,
 
-        /// Name for the new rule
+        /// Name for the new rule (auto-generated if not specified)
         #[arg(short, long)]
+        name: Option<String>,
+    },
+
+    /// Rename a rule
+    Rename {
+        /// Current rule name
         name: String,
+
+        /// New rule name
+        new_name: String,
     },
 
     /// Apply rule to profile, creating new customized profile
