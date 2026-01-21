@@ -20,7 +20,7 @@ default = []
 gui = ["eframe", "egui-cha", "egui-cha-ds", "rfd"]
 
 [dependencies]
-dot-agent-core = { path = "../dot-agent-core", version = "0.3.0" }
+dot-agent-core = { path = "../dot-agent-core", version = "0.3.1" }
 clap.workspace = true
 clap_complete.workspace = true
 colored.workspace = true
