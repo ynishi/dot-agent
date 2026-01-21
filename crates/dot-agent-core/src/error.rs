@@ -38,6 +38,30 @@ pub enum DotAgentError {
 
     #[error("Git error: {0}")]
     Git(String),
+
+    #[error("Rule not found: {name}")]
+    RuleNotFound { name: String },
+
+    #[error("Rule already exists: {name}")]
+    RuleAlreadyExists { name: String },
+
+    #[error("Invalid rule name: '{name}' - must be alphanumeric, hyphen, underscore, 1-64 chars")]
+    InvalidRuleName { name: String },
+
+    #[error("Claude CLI not found. Install with: brew install claude")]
+    ClaudeNotFound,
+
+    #[error("Claude CLI execution failed: {message}")]
+    ClaudeExecutionFailed { message: String },
+
+    #[error("Glob pattern error: {0}")]
+    GlobPattern(#[from] glob::PatternError),
+
+    #[error("Glob error: {0}")]
+    Glob(#[from] glob::GlobError),
+
+    #[error("Snapshot not found: {id}")]
+    SnapshotNotFound { id: String },
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -50,6 +74,12 @@ impl DotAgentError {
             Self::LocalModifications { .. } => 4,
             Self::InvalidProfileName { .. } => 5,
             Self::Conflict { .. } => 6,
+            Self::RuleNotFound { .. } => 7,
+            Self::RuleAlreadyExists { .. } => 8,
+            Self::InvalidRuleName { .. } => 9,
+            Self::ClaudeNotFound => 10,
+            Self::ClaudeExecutionFailed { .. } => 11,
+            Self::SnapshotNotFound { .. } => 12,
             _ => 1,
         }
     }

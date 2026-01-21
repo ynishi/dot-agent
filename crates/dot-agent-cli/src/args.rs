@@ -52,14 +52,14 @@ pub enum Commands {
         shell: Shell,
     },
 
-    /// Install a profile to target
+    /// Install a profile to current directory (or --path target)
     Install {
-        /// Profile name
-        #[arg(short, long)]
+        /// Profile name to install
         profile: String,
 
-        /// Target directory (default: current directory)
-        target: Option<PathBuf>,
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
 
         /// Install to ~/.claude (global)
         #[arg(short, long)]
@@ -80,12 +80,12 @@ pub enum Commands {
 
     /// Upgrade installed profile to latest
     Upgrade {
-        /// Profile name
-        #[arg(short, long)]
+        /// Profile name to upgrade
         profile: String,
 
-        /// Target directory
-        target: Option<PathBuf>,
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
 
         /// Upgrade ~/.claude (global)
         #[arg(short, long)]
@@ -106,12 +106,12 @@ pub enum Commands {
 
     /// Show diff between profile and installed files
     Diff {
-        /// Profile name
-        #[arg(short, long)]
+        /// Profile name to diff
         profile: String,
 
-        /// Target directory
-        target: Option<PathBuf>,
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
 
         /// Diff ~/.claude (global)
         #[arg(short, long)]
@@ -120,12 +120,12 @@ pub enum Commands {
 
     /// Remove installed profile
     Remove {
-        /// Profile name
-        #[arg(short, long)]
+        /// Profile name to remove
         profile: String,
 
-        /// Target directory
-        target: Option<PathBuf>,
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
 
         /// Remove from ~/.claude (global)
         #[arg(short, long)]
@@ -142,12 +142,176 @@ pub enum Commands {
 
     /// Show installation status
     Status {
-        /// Target directory
-        target: Option<PathBuf>,
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
 
         /// Check ~/.claude (global)
         #[arg(short, long)]
         global: bool,
+    },
+
+    /// Copy an existing profile to a new name
+    Copy {
+        /// Source profile name
+        source: String,
+
+        /// Destination profile name
+        dest: String,
+
+        /// Force overwrite if destination exists
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Apply a rule to installed files
+    Apply {
+        /// Rule name to apply
+        rule: String,
+
+        /// Apply only to files from this installed profile
+        #[arg(short, long)]
+        profile: Option<String>,
+
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Apply without confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Manage customization rules
+    Rule {
+        #[command(subcommand)]
+        action: RuleAction,
+    },
+
+    /// Manage snapshots of installed files
+    Snapshot {
+        #[command(subcommand)]
+        action: SnapshotAction,
+    },
+
+    /// Switch to a different profile (remove current, install new)
+    Switch {
+        /// Profile name to switch to
+        profile: String,
+
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Switch ~/.claude (global)
+        #[arg(short, long)]
+        global: bool,
+
+        /// Skip snapshot before switching
+        #[arg(long)]
+        no_snapshot: bool,
+
+        /// Force remove even with local modifications
+        #[arg(short, long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SnapshotAction {
+    /// Save a snapshot of current installed files
+    Save {
+        /// Optional message describing the snapshot
+        #[arg(short, long)]
+        message: Option<String>,
+
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Snapshot ~/.claude (global)
+        #[arg(short, long)]
+        global: bool,
+    },
+
+    /// List all snapshots
+    List {
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// List for ~/.claude (global)
+        #[arg(short, long)]
+        global: bool,
+    },
+
+    /// Restore a snapshot
+    Restore {
+        /// Snapshot ID to restore
+        id: String,
+
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Restore to ~/.claude (global)
+        #[arg(short, long)]
+        global: bool,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Show diff between snapshot and current state
+    Diff {
+        /// Snapshot ID to compare
+        id: String,
+
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Diff for ~/.claude (global)
+        #[arg(short, long)]
+        global: bool,
+    },
+
+    /// Delete a snapshot
+    Delete {
+        /// Snapshot ID to delete
+        id: String,
+
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Delete for ~/.claude (global)
+        #[arg(short, long)]
+        global: bool,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Prune old snapshots, keeping only the most recent N
+    Prune {
+        /// Number of snapshots to keep (default: 10)
+        #[arg(short, long, default_value = "10")]
+        keep: usize,
+
+        /// Target directory (default: current directory's .claude)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Prune for ~/.claude (global)
+        #[arg(short, long)]
+        global: bool,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
     },
 }
 
@@ -192,5 +356,157 @@ pub enum ProfileAction {
         /// Force overwrite if profile exists
         #[arg(short, long)]
         force: bool,
+    },
+
+    /// Manage profile snapshots
+    Snapshot {
+        #[command(subcommand)]
+        action: ProfileSnapshotAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProfileSnapshotAction {
+    /// Save a snapshot of a profile
+    Save {
+        /// Profile name
+        profile: String,
+
+        /// Optional message describing the snapshot
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+
+    /// List all snapshots for a profile
+    List {
+        /// Profile name
+        profile: String,
+    },
+
+    /// Restore a snapshot to the profile
+    Restore {
+        /// Profile name
+        profile: String,
+
+        /// Snapshot ID to restore
+        id: String,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Show diff between snapshot and current profile state
+    Diff {
+        /// Profile name
+        profile: String,
+
+        /// Snapshot ID to compare
+        id: String,
+    },
+
+    /// Delete a snapshot
+    Delete {
+        /// Profile name
+        profile: String,
+
+        /// Snapshot ID to delete
+        id: String,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Prune old snapshots
+    Prune {
+        /// Profile name
+        profile: String,
+
+        /// Number of snapshots to keep (default: 10)
+        #[arg(short, long, default_value = "10")]
+        keep: usize,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RuleAction {
+    /// Create a new rule (generates template .md file)
+    Add {
+        /// Rule name
+        name: String,
+
+        /// Import from existing markdown file
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
+
+    /// List all rules
+    List,
+
+    /// Show rule contents
+    Show {
+        /// Rule name
+        name: String,
+    },
+
+    /// Open rule in editor
+    Edit {
+        /// Rule name
+        name: String,
+    },
+
+    /// Remove a rule
+    Remove {
+        /// Rule name
+        name: String,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Extract rule from existing profile (AI-powered)
+    Extract {
+        /// Source profile to extract from
+        #[arg(short = 'p', long)]
+        profile: String,
+
+        /// Name for the new rule
+        #[arg(short, long)]
+        name: String,
+    },
+
+    /// Generate rule from natural language instruction (AI-powered)
+    Generate {
+        /// Natural language instruction (e.g., "Rust用にして")
+        instruction: String,
+
+        /// Name for the new rule
+        #[arg(short, long)]
+        name: String,
+    },
+
+    /// Apply rule to profile, creating new customized profile
+    Apply {
+        /// Source profile name
+        #[arg(short = 'p', long)]
+        profile: String,
+
+        /// Rule name to apply
+        #[arg(short = 'r', long)]
+        rule: String,
+
+        /// Name for the new profile (default: {profile}-{rule})
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Dry run (don't create new profile)
+        #[arg(short, long)]
+        dry_run: bool,
     },
 }

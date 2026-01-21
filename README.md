@@ -60,11 +60,14 @@ dot-agent remove -p my-profile ~/my-project
 | `profile list` | List all profiles |
 | `profile remove <name>` | Delete a profile |
 | `profile import <source>` | Import from directory or git URL |
+| `profile snapshot <action>` | Manage profile snapshots |
 | `install -p <profile> [target]` | Install profile to target |
 | `upgrade -p <profile> [target]` | Update installed files |
 | `diff -p <profile> [target]` | Show differences |
 | `remove -p <profile> [target]` | Remove installed files |
 | `status [target]` | Show installation status |
+| `switch -p <profile> [target]` | Switch to a different profile |
+| `snapshot <action>` | Manage target snapshots |
 | `completions <shell>` | Generate shell completions |
 
 ## Options
@@ -96,6 +99,54 @@ By default, installed files are prefixed with the profile name to avoid conflict
 - `skills/tdd/SKILL.md` → `skills/my-profile-tdd/SKILL.md`
 
 Use `--no-prefix` to disable this behavior.
+
+## Snapshots
+
+Snapshots allow you to save and restore states of both profiles (source) and installed targets.
+
+### Profile Snapshots
+
+Save/restore profile source directories:
+
+```bash
+# Save current state
+dot-agent profile snapshot save my-profile -m "before refactoring"
+
+# List snapshots
+dot-agent profile snapshot list my-profile
+
+# Show changes since snapshot
+dot-agent profile snapshot diff my-profile <id>
+
+# Restore to previous state
+dot-agent profile snapshot restore my-profile <id>
+
+# Delete old snapshots, keep recent 5
+dot-agent profile snapshot prune my-profile --keep 5
+```
+
+### Target Snapshots
+
+Save/restore installed configurations:
+
+```bash
+# Save current installation state
+dot-agent snapshot save --path ~/my-project -m "working config"
+
+# List snapshots
+dot-agent snapshot list --path ~/my-project
+
+# Show changes since snapshot
+dot-agent snapshot diff <id> --path ~/my-project
+
+# Restore to previous state
+dot-agent snapshot restore <id> --path ~/my-project
+
+# Prune old snapshots
+dot-agent snapshot prune --keep 10 --path ~/my-project
+```
+
+Snapshots are automatically created before `switch` operations.
 
 ## Crates
 

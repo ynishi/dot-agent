@@ -137,6 +137,27 @@ impl ProfileManager {
         Ok(())
     }
 
+    /// Copy an existing profile to a new name
+    pub fn copy_profile(&self, source_name: &str, dest_name: &str, force: bool) -> Result<Profile> {
+        let source = self.get_profile(source_name)?;
+        validate_profile_name(dest_name)?;
+
+        let dest_path = self.profiles_dir().join(dest_name);
+
+        if dest_path.exists() {
+            if !force {
+                return Err(DotAgentError::ProfileAlreadyExists {
+                    name: dest_name.to_string(),
+                });
+            }
+            fs::remove_dir_all(&dest_path)?;
+        }
+
+        copy_dir_recursive(&source.path, &dest_path)?;
+
+        Ok(Profile::new(dest_name.to_string(), dest_path))
+    }
+
     /// Import a directory as a profile
     pub fn import_profile(&self, source: &Path, name: &str, force: bool) -> Result<Profile> {
         validate_profile_name(name)?;

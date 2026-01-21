@@ -12,7 +12,7 @@ use dot_agent_core::profile::ProfileManager;
 use dot_agent_core::{DotAgentError, Result};
 
 mod args;
-use args::{Cli, Commands, ProfileAction, Shell};
+use args::{Cli, Commands, ProfileAction, ProfileSnapshotAction, RuleAction, Shell, SnapshotAction};
 
 #[cfg(feature = "gui")]
 mod gui;
@@ -51,7 +51,7 @@ fn main() -> ExitCode {
         }
         Some(Commands::Install {
             profile,
-            target,
+            path,
             global,
             force,
             dry_run,
@@ -59,7 +59,7 @@ fn main() -> ExitCode {
         }) => handle_install(
             &base_dir,
             &profile,
-            target.as_deref(),
+            path.as_deref(),
             global,
             force,
             dry_run,
@@ -67,7 +67,7 @@ fn main() -> ExitCode {
         ),
         Some(Commands::Upgrade {
             profile,
-            target,
+            path,
             global,
             force,
             dry_run,
@@ -75,7 +75,7 @@ fn main() -> ExitCode {
         }) => handle_upgrade(
             &base_dir,
             &profile,
-            target.as_deref(),
+            path.as_deref(),
             global,
             force,
             dry_run,
@@ -83,26 +83,46 @@ fn main() -> ExitCode {
         ),
         Some(Commands::Diff {
             profile,
-            target,
+            path,
             global,
-        }) => handle_diff(&base_dir, &profile, target.as_deref(), global),
+        }) => handle_diff(&base_dir, &profile, path.as_deref(), global),
         Some(Commands::Remove {
             profile,
-            target,
+            path,
             global,
             force,
             dry_run,
         }) => handle_remove(
             &base_dir,
             &profile,
-            target.as_deref(),
+            path.as_deref(),
             global,
             force,
             dry_run,
         ),
-        Some(Commands::Status { target, global }) => {
-            handle_status(&base_dir, target.as_deref(), global)
+        Some(Commands::Status { path, global }) => {
+            handle_status(&base_dir, path.as_deref(), global)
         }
+        Some(Commands::Copy {
+            source,
+            dest,
+            force,
+        }) => handle_copy(&base_dir, &source, &dest, force),
+        Some(Commands::Apply {
+            rule,
+            profile,
+            path,
+            force,
+        }) => handle_apply(&base_dir, &rule, profile.as_deref(), path.as_deref(), force),
+        Some(Commands::Rule { action }) => handle_rule(action, &base_dir),
+        Some(Commands::Snapshot { action }) => handle_snapshot(action, &base_dir),
+        Some(Commands::Switch {
+            profile,
+            path,
+            global,
+            no_snapshot,
+            force,
+        }) => handle_switch(&base_dir, &profile, path.as_deref(), global, no_snapshot, force),
         None => {
             Cli::command().print_help().ok();
             Ok(())
@@ -221,6 +241,9 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
             force,
         } => {
             handle_import(&manager, &source, name, path, branch, force)?;
+        }
+        ProfileAction::Snapshot { action } => {
+            handle_profile_snapshot(action, base_dir, &manager)?;
         }
     }
 
@@ -449,6 +472,176 @@ fn handle_remove(
     Ok(())
 }
 
+fn handle_apply(
+    base_dir: &Path,
+    rule_name: &str,
+    profile_filter: Option<&str>,
+    target: Option<&Path>,
+    force: bool,
+) -> Result<()> {
+    use dot_agent_core::rule::RuleManager;
+
+    let rule_manager = RuleManager::new(base_dir.to_path_buf());
+    let installer = Installer::new(base_dir.to_path_buf());
+
+    let rule = rule_manager.get(rule_name)?;
+    let target_dir = installer.resolve_target(target, false)?;
+
+    // Load metadata to find installed files
+    let metadata = Metadata::load(&target_dir)?;
+    let meta = metadata.ok_or_else(|| DotAgentError::TargetNotFound {
+        path: target_dir.clone(),
+    })?;
+
+    // Collect target files
+    let target_files: Vec<PathBuf> = if let Some(profile) = profile_filter {
+        // Filter to specific profile's files
+        if !meta.installed.profiles.contains(&profile.to_string()) {
+            return Err(DotAgentError::ProfileNotFound {
+                name: profile.to_string(),
+            });
+        }
+        meta.files
+            .keys()
+            .filter(|f| f.starts_with(&format!("{}:", profile)))
+            .map(|f| {
+                // Remove profile prefix to get actual filename
+                let parts: Vec<&str> = f.splitn(2, ':').collect();
+                target_dir.join(parts.get(1).unwrap_or(&f.as_str()))
+            })
+            .filter(|p| p.exists())
+            .collect()
+    } else {
+        // All installed files
+        meta.files
+            .keys()
+            .map(|f| {
+                let parts: Vec<&str> = f.splitn(2, ':').collect();
+                target_dir.join(parts.get(1).unwrap_or(&f.as_str()))
+            })
+            .filter(|p| p.exists())
+            .collect()
+    };
+
+    if target_files.is_empty() {
+        println!("No files to apply rule to.");
+        return Ok(());
+    }
+
+    println!();
+    println!("Rule: {}", rule_name.cyan());
+    println!("Target: {}", target_dir.display());
+    if let Some(p) = profile_filter {
+        println!("Profile filter: {}", p.cyan());
+    }
+    println!();
+    println!("Files to modify ({}):", target_files.len());
+    for f in &target_files {
+        if let Ok(rel) = f.strip_prefix(&target_dir) {
+            println!("  {}", rel.display());
+        }
+    }
+    println!();
+
+    if !force {
+        print!("Apply rule to these files? [y/N]: ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    // Apply rule to each file
+    println!("Applying rule...");
+    let mut modified = 0;
+
+    for file_path in &target_files {
+        if let Ok(rel) = file_path.strip_prefix(&target_dir) {
+            print!("  {} ... ", rel.display());
+            io::stdout().flush()?;
+
+            match apply_rule_to_file(&rule.content, file_path) {
+                Ok(changed) => {
+                    if changed {
+                        println!("{}", "modified".green());
+                        modified += 1;
+                    } else {
+                        println!("{}", "unchanged".yellow());
+                    }
+                }
+                Err(e) => {
+                    println!("{}: {}", "error".red(), e);
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("{} {} file(s) modified.", "Done:".green(), modified);
+
+    Ok(())
+}
+
+fn apply_rule_to_file(rule_content: &str, file_path: &Path) -> Result<bool> {
+    use std::process::Command;
+
+    let original = std::fs::read_to_string(file_path)?;
+
+    // Use claude CLI to apply the rule
+    let prompt = format!(
+        "Apply the following customization rule to the file content. \
+         Return ONLY the modified file content, no explanations.\n\n\
+         === RULE ===\n{}\n\n=== FILE CONTENT ===\n{}",
+        rule_content, original
+    );
+
+    let output = Command::new("claude")
+        .arg("-p")
+        .arg(&prompt)
+        .output()
+        .map_err(DotAgentError::Io)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DotAgentError::ClaudeExecutionFailed {
+            message: stderr.to_string(),
+        });
+    }
+
+    let modified = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if modified == original {
+        return Ok(false);
+    }
+
+    std::fs::write(file_path, &modified)?;
+    Ok(true)
+}
+
+fn handle_copy(base_dir: &Path, source: &str, dest: &str, force: bool) -> Result<()> {
+    let manager = ProfileManager::new(base_dir.to_path_buf());
+
+    let profile = manager.copy_profile(source, dest, force)?;
+
+    println!();
+    println!(
+        "{} {} -> {}",
+        "Copied:".green(),
+        source.cyan(),
+        dest.cyan()
+    );
+    println!("  Path: {}", profile.path.display());
+    println!();
+    println!("Contents: {}", profile.contents_summary());
+
+    Ok(())
+}
+
 fn handle_status(base_dir: &Path, target: Option<&Path>, global: bool) -> Result<()> {
     let installer = Installer::new(base_dir.to_path_buf());
     let target_dir = installer.resolve_target(target, global)?;
@@ -652,4 +845,698 @@ fn extract_repo_name(url: &str) -> String {
         .next()
         .unwrap_or("profile")
         .to_string()
+}
+
+fn handle_profile_snapshot(
+    action: ProfileSnapshotAction,
+    base_dir: &Path,
+    profile_manager: &ProfileManager,
+) -> Result<()> {
+    use dot_agent_core::snapshot::ProfileSnapshotManager;
+
+    let snapshot_manager = ProfileSnapshotManager::new(base_dir.to_path_buf());
+
+    match action {
+        ProfileSnapshotAction::Save { profile, message } => {
+            let p = profile_manager.get_profile(&profile)?;
+
+            println!();
+            println!("Creating snapshot of profile '{}'...", profile.cyan());
+
+            let snapshot = snapshot_manager.save(&profile, &p.path, message.as_deref())?;
+
+            println!();
+            println!("{} {}", "Snapshot saved:".green(), snapshot.id.cyan());
+            println!("  Time: {}", snapshot.display_time());
+            println!("  Files: {}", snapshot.file_count);
+            if let Some(msg) = &snapshot.message {
+                println!("  Message: {}", msg);
+            }
+        }
+        ProfileSnapshotAction::List { profile } => {
+            let _ = profile_manager.get_profile(&profile)?;
+
+            let snapshots = snapshot_manager.list(&profile)?;
+
+            if snapshots.is_empty() {
+                println!("No snapshots found for profile '{}'.", profile);
+                println!();
+                println!(
+                    "Create one with: dot-agent profile snapshot save {}",
+                    profile
+                );
+                return Ok(());
+            }
+
+            println!();
+            println!("Snapshots for profile '{}':", profile.cyan());
+            println!();
+
+            for snap in snapshots {
+                println!(
+                    "  {} {} ({} files)",
+                    snap.id.cyan(),
+                    snap.display_time(),
+                    snap.file_count
+                );
+                if let Some(msg) = &snap.message {
+                    println!("    {}", msg.dimmed());
+                }
+            }
+        }
+        ProfileSnapshotAction::Restore { profile, id, force } => {
+            let p = profile_manager.get_profile(&profile)?;
+            let snapshot = snapshot_manager.get(&profile, &id)?;
+
+            println!();
+            println!("Restore snapshot {} for profile '{}'?", id.cyan(), profile);
+            println!("  Time: {}", snapshot.display_time());
+            println!("  Files: {}", snapshot.file_count);
+            println!();
+            println!(
+                "{}",
+                "WARNING: This will replace all files in the profile directory.".yellow()
+            );
+
+            if !force {
+                print!("Type 'yes' to confirm: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if input.trim() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            let (removed, restored) = snapshot_manager.restore(&profile, &p.path, &id)?;
+
+            println!();
+            println!("{}", "Snapshot restored!".green());
+            println!("  Removed: {} files", removed);
+            println!("  Restored: {} files", restored);
+        }
+        ProfileSnapshotAction::Diff { profile, id } => {
+            let p = profile_manager.get_profile(&profile)?;
+
+            let diff = snapshot_manager.diff(&profile, &p.path, &id)?;
+
+            println!();
+            println!(
+                "Diff: snapshot {} vs current profile '{}'",
+                id.cyan(),
+                profile
+            );
+            println!();
+
+            if !diff.modified.is_empty() {
+                println!("Modified ({}):", diff.modified.len());
+                for f in &diff.modified {
+                    println!("  {} {}", "[M]".yellow(), f);
+                }
+            }
+
+            if !diff.added.is_empty() {
+                println!("Added ({}):", diff.added.len());
+                for f in &diff.added {
+                    println!("  {} {}", "[A]".green(), f);
+                }
+            }
+
+            if !diff.deleted.is_empty() {
+                println!("Deleted ({}):", diff.deleted.len());
+                for f in &diff.deleted {
+                    println!("  {} {}", "[D]".red(), f);
+                }
+            }
+
+            if !diff.has_changes() {
+                println!("{}", "No changes since snapshot.".green());
+            }
+
+            println!();
+            println!(
+                "Summary: {} unchanged, {} modified, {} added, {} deleted",
+                diff.unchanged.len(),
+                diff.modified.len(),
+                diff.added.len(),
+                diff.deleted.len()
+            );
+        }
+        ProfileSnapshotAction::Delete { profile, id, force } => {
+            let _ = profile_manager.get_profile(&profile)?;
+            let snapshot = snapshot_manager.get(&profile, &id)?;
+
+            if !force {
+                println!();
+                println!(
+                    "Delete snapshot {} for profile '{}'?",
+                    id.yellow(),
+                    profile
+                );
+                println!("  Time: {}", snapshot.display_time());
+                println!("  Files: {}", snapshot.file_count);
+                println!();
+                print!("Type 'yes' to confirm: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if input.trim() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            snapshot_manager.delete(&profile, &id)?;
+            println!();
+            println!("{} snapshot {}", "Deleted:".red(), id);
+        }
+        ProfileSnapshotAction::Prune {
+            profile,
+            keep,
+            force,
+        } => {
+            let _ = profile_manager.get_profile(&profile)?;
+
+            let snapshots = snapshot_manager.list(&profile)?;
+            let to_delete = snapshots.len().saturating_sub(keep);
+
+            if to_delete == 0 {
+                println!();
+                println!(
+                    "No snapshots to prune ({} snapshots, keeping {})",
+                    snapshots.len(),
+                    keep
+                );
+                return Ok(());
+            }
+
+            println!();
+            println!(
+                "Prune {} snapshot(s) for profile '{}', keeping {} most recent?",
+                to_delete, profile, keep
+            );
+
+            if !force {
+                print!("Type 'yes' to confirm: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if input.trim() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            let deleted = snapshot_manager.prune(&profile, keep)?;
+
+            println!();
+            println!("{} {} snapshot(s)", "Pruned:".green(), deleted.len());
+            for id in &deleted {
+                println!("  {}", id.dimmed());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_rule(action: RuleAction, base_dir: &Path) -> Result<()> {
+    use dot_agent_core::rule::{extract_rule, generate_rule, RuleExecutor, RuleManager};
+
+    let manager = RuleManager::new(base_dir.to_path_buf());
+    let profile_manager = ProfileManager::new(base_dir.to_path_buf());
+
+    match action {
+        RuleAction::Add { name, file } => {
+            let rule = if let Some(source_file) = file {
+                manager.import(&name, &source_file)?
+            } else {
+                manager.create(&name)?
+            };
+
+            println!();
+            println!("{} {}", "Created:".green(), rule.path.display());
+            println!();
+            println!("Next steps:");
+            println!("  1. Edit rule: {}", rule.path.display());
+            println!("  2. Apply: dot-agent rule apply -p <profile> -r {}", name);
+        }
+        RuleAction::List => {
+            let rules = manager.list()?;
+            if rules.is_empty() {
+                println!("No rules found.");
+                println!();
+                println!("Create one with: dot-agent rule add <name>");
+                return Ok(());
+            }
+
+            println!();
+            println!("Available rules:");
+            println!();
+            for r in rules {
+                println!("  {}", r.name.cyan().bold());
+                println!("    {}", r.summary());
+                println!();
+            }
+        }
+        RuleAction::Show { name } => {
+            let rule = manager.get(&name)?;
+            println!();
+            println!("Rule: {}", rule.name.cyan().bold());
+            println!("Path: {}", rule.path.display());
+            println!();
+            println!("--- Content ---");
+            println!("{}", rule.content);
+        }
+        RuleAction::Edit { name } => {
+            let rule = manager.get(&name)?;
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+
+            println!("Opening {} in {}...", rule.path.display(), editor);
+
+            Command::new(&editor)
+                .arg(&rule.path)
+                .status()
+                .map_err(DotAgentError::Io)?;
+        }
+        RuleAction::Remove { name, force } => {
+            let rule = manager.get(&name)?;
+
+            if !force {
+                println!();
+                println!("Remove rule '{}'? This will delete:", name.yellow());
+                println!("  {}", rule.path.display());
+                println!();
+                print!("Type 'yes' to confirm: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if input.trim() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            manager.remove(&name)?;
+            println!();
+            println!("{} {}", "Removed:".red(), rule.path.display());
+        }
+        RuleAction::Extract { profile, name } => {
+            let source_profile = profile_manager.get_profile(&profile)?;
+
+            println!();
+            println!("Extracting rule from profile '{}'...", profile.cyan());
+            println!();
+
+            let rule = extract_rule(&source_profile, &name, &manager)?;
+
+            println!("{} {}", "Created:".green(), rule.path.display());
+            println!();
+            println!("The AI has extracted customization patterns from the profile.");
+            println!("Review and edit: {}", rule.path.display());
+        }
+        RuleAction::Generate { instruction, name } => {
+            println!();
+            println!("Generating rule from instruction...");
+            println!("  \"{}\"", instruction.cyan());
+            println!();
+
+            let rule = generate_rule(&instruction, &name, &manager)?;
+
+            println!("{} {}", "Created:".green(), rule.path.display());
+            println!();
+            println!("The AI has generated a customization rule.");
+            println!("Review and edit: {}", rule.path.display());
+        }
+        RuleAction::Apply {
+            profile,
+            rule,
+            name,
+            dry_run,
+        } => {
+            let source_profile = profile_manager.get_profile(&profile)?;
+            let r = manager.get(&rule)?;
+
+            println!();
+            println!("Profile: {}", profile.cyan());
+            println!("Rule: {}", rule.cyan());
+            if dry_run {
+                println!("{}", "(dry run)".yellow());
+            }
+            println!();
+
+            let executor = RuleExecutor::new(&r, &profile_manager);
+            let result = executor.apply(&source_profile, name.as_deref(), dry_run)?;
+
+            if dry_run {
+                println!(
+                    "Would create new profile: {}",
+                    result.new_profile_name.green()
+                );
+                println!("  Path: {}", result.new_profile_path.display());
+            } else {
+                println!("{}", "Customization complete!".green());
+                println!();
+                println!("New profile created: {}", result.new_profile_name.cyan());
+                println!("  Path: {}", result.new_profile_path.display());
+                println!("  Files modified: {}", result.files_modified);
+                println!();
+                println!(
+                    "Install with: dot-agent install -p {}",
+                    result.new_profile_name
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
+    use dot_agent_core::snapshot::{SnapshotManager, SnapshotTrigger};
+
+    let snapshot_manager = SnapshotManager::new(base_dir.to_path_buf());
+    let installer = Installer::new(base_dir.to_path_buf());
+
+    match action {
+        SnapshotAction::Save {
+            message,
+            path,
+            global,
+        } => {
+            let target_dir = installer.resolve_target(path.as_deref(), global)?;
+
+            if !target_dir.exists() {
+                return Err(DotAgentError::TargetNotFound { path: target_dir });
+            }
+
+            println!();
+            println!("Creating snapshot of {}...", target_dir.display());
+
+            let snapshot = snapshot_manager.save(
+                &target_dir,
+                SnapshotTrigger::Manual,
+                message.as_deref(),
+                &[],
+            )?;
+
+            println!();
+            println!("{} {}", "Snapshot saved:".green(), snapshot.id.cyan());
+            println!("  Time: {}", snapshot.display_time());
+            println!("  Files: {}", snapshot.file_count);
+            if let Some(msg) = &snapshot.message {
+                println!("  Message: {}", msg);
+            }
+        }
+        SnapshotAction::List { path, global } => {
+            let target_dir = installer.resolve_target(path.as_deref(), global)?;
+
+            let snapshots = snapshot_manager.list(&target_dir)?;
+
+            if snapshots.is_empty() {
+                println!("No snapshots found.");
+                println!();
+                println!("Create one with: dot-agent snapshot save");
+                return Ok(());
+            }
+
+            println!();
+            println!("Snapshots for {}:", target_dir.display());
+            println!();
+
+            for snap in snapshots {
+                println!(
+                    "  {} {} [{}] ({} files)",
+                    snap.id.cyan(),
+                    snap.display_time(),
+                    snap.trigger.as_str().yellow(),
+                    snap.file_count
+                );
+                if !snap.profiles_affected.is_empty() {
+                    println!("    Profiles: {}", snap.profiles_affected.join(", ").dimmed());
+                }
+                if let Some(msg) = &snap.message {
+                    println!("    {}", msg.dimmed());
+                }
+            }
+        }
+        SnapshotAction::Restore {
+            id,
+            path,
+            global,
+            force,
+        } => {
+            let target_dir = installer.resolve_target(path.as_deref(), global)?;
+
+            let snapshot = snapshot_manager.get(&target_dir, &id)?;
+
+            println!();
+            println!("Restore snapshot {}?", id.cyan());
+            println!("  Time: {}", snapshot.display_time());
+            println!("  Files: {}", snapshot.file_count);
+            println!();
+            println!(
+                "{}",
+                "WARNING: This will replace all files in the target directory.".yellow()
+            );
+
+            if !force {
+                print!("Type 'yes' to confirm: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if input.trim() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            let (removed, restored) = snapshot_manager.restore(&target_dir, &id)?;
+
+            println!();
+            println!("{}", "Snapshot restored!".green());
+            println!("  Removed: {} files", removed);
+            println!("  Restored: {} files", restored);
+        }
+        SnapshotAction::Diff { id, path, global } => {
+            let target_dir = installer.resolve_target(path.as_deref(), global)?;
+
+            let diff = snapshot_manager.diff(&target_dir, &id)?;
+
+            println!();
+            println!("Diff: snapshot {} vs current", id.cyan());
+            println!();
+
+            if !diff.modified.is_empty() {
+                println!("Modified ({}):", diff.modified.len());
+                for f in &diff.modified {
+                    println!("  {} {}", "[M]".yellow(), f);
+                }
+            }
+
+            if !diff.added.is_empty() {
+                println!("Added ({}):", diff.added.len());
+                for f in &diff.added {
+                    println!("  {} {}", "[A]".green(), f);
+                }
+            }
+
+            if !diff.deleted.is_empty() {
+                println!("Deleted ({}):", diff.deleted.len());
+                for f in &diff.deleted {
+                    println!("  {} {}", "[D]".red(), f);
+                }
+            }
+
+            if !diff.has_changes() {
+                println!("{}", "No changes since snapshot.".green());
+            }
+
+            println!();
+            println!(
+                "Summary: {} unchanged, {} modified, {} added, {} deleted",
+                diff.unchanged.len(),
+                diff.modified.len(),
+                diff.added.len(),
+                diff.deleted.len()
+            );
+        }
+        SnapshotAction::Delete {
+            id,
+            path,
+            global,
+            force,
+        } => {
+            let target_dir = installer.resolve_target(path.as_deref(), global)?;
+
+            let snapshot = snapshot_manager.get(&target_dir, &id)?;
+
+            if !force {
+                println!();
+                println!("Delete snapshot {}?", id.yellow());
+                println!("  Time: {}", snapshot.display_time());
+                println!("  Files: {}", snapshot.file_count);
+                println!();
+                print!("Type 'yes' to confirm: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if input.trim() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            snapshot_manager.delete(&target_dir, &id)?;
+            println!();
+            println!("{} snapshot {}", "Deleted:".red(), id);
+        }
+        SnapshotAction::Prune {
+            keep,
+            path,
+            global,
+            force,
+        } => {
+            let target_dir = installer.resolve_target(path.as_deref(), global)?;
+
+            let snapshots = snapshot_manager.list(&target_dir)?;
+            let to_delete = snapshots.len().saturating_sub(keep);
+
+            if to_delete == 0 {
+                println!();
+                println!(
+                    "No snapshots to prune ({} snapshots, keeping {})",
+                    snapshots.len(),
+                    keep
+                );
+                return Ok(());
+            }
+
+            println!();
+            println!(
+                "Prune {} snapshot(s), keeping {} most recent?",
+                to_delete, keep
+            );
+
+            if !force {
+                print!("Type 'yes' to confirm: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if input.trim() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            let deleted = snapshot_manager.prune(&target_dir, keep)?;
+
+            println!();
+            println!("{} {} snapshot(s)", "Pruned:".green(), deleted.len());
+            for id in &deleted {
+                println!("  {}", id.dimmed());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_switch(
+    base_dir: &Path,
+    profile_name: &str,
+    target: Option<&Path>,
+    global: bool,
+    no_snapshot: bool,
+    force: bool,
+) -> Result<()> {
+    use dot_agent_core::snapshot::{SnapshotManager, SnapshotTrigger};
+
+    let profile_manager = ProfileManager::new(base_dir.to_path_buf());
+    let installer = Installer::new(base_dir.to_path_buf());
+    let snapshot_manager = SnapshotManager::new(base_dir.to_path_buf());
+
+    // Verify new profile exists
+    let new_profile = profile_manager.get_profile(profile_name)?;
+    let target_dir = installer.resolve_target(target, global)?;
+
+    println!();
+    println!("Switching to profile: {}", profile_name.cyan());
+    println!("Target: {}", target_dir.display());
+    println!();
+
+    // Get current installed profiles
+    let metadata = Metadata::load(&target_dir)?;
+    let current_profiles: Vec<String> = metadata
+        .as_ref()
+        .map(|m| m.installed.profiles.clone())
+        .unwrap_or_default();
+
+    if current_profiles.is_empty() {
+        println!("No profiles currently installed. Installing {}...", profile_name);
+        let result = installer.install(&new_profile, &target_dir, force, false, false, None)?;
+        println!();
+        println!("{} Installed {} files.", "Done:".green(), result.installed);
+        return Ok(());
+    }
+
+    println!("Current profiles: {}", current_profiles.join(", ").yellow());
+
+    // Create snapshot before switching (unless --no-snapshot)
+    if !no_snapshot && target_dir.exists() {
+        println!();
+        println!("Creating snapshot before switch...");
+        let snapshot = snapshot_manager.save(
+            &target_dir,
+            SnapshotTrigger::PreInstall,
+            Some(&format!("before switch to {}", profile_name)),
+            &[profile_name.to_string()],
+        )?;
+        println!("  Saved: {} ({} files)", snapshot.id.cyan(), snapshot.file_count);
+    }
+
+    // Remove current profiles
+    println!();
+    println!("Removing current profiles...");
+    for current_name in &current_profiles {
+        if let Ok(current_profile) = profile_manager.get_profile(current_name) {
+            match installer.remove(&current_profile, &target_dir, force, false, None) {
+                Ok((removed, _)) => {
+                    println!("  {} {} ({} files)", "Removed:".red(), current_name, removed);
+                }
+                Err(e) => {
+                    println!("  {} removing {}: {}", "Warning:".yellow(), current_name, e);
+                }
+            }
+        }
+    }
+
+    // Install new profile
+    println!();
+    println!("Installing {}...", profile_name);
+    let result = installer.install(&new_profile, &target_dir, force, false, false, None)?;
+
+    println!();
+    println!("{}", "Switch complete!".green());
+    println!("  Installed: {} files", result.installed);
+    if result.skipped > 0 {
+        println!("  Skipped: {} files", result.skipped);
+    }
+
+    Ok(())
 }
