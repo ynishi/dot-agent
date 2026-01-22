@@ -14,8 +14,8 @@ use dot_agent_core::{DotAgentError, Result};
 
 mod args;
 use args::{
-    Cli, Commands, ConfigAction, ProfileAction, ProfileSnapshotAction, RuleAction, Shell,
-    SnapshotAction,
+    ChannelAction, Cli, Commands, ConfigAction, HubAction, ProfileAction, ProfileSnapshotAction,
+    RuleAction, Shell, SnapshotAction,
 };
 
 #[cfg(feature = "gui")]
@@ -50,7 +50,21 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Some(Commands::Profile { action }) => handle_profile(action, &base_dir),
         Some(Commands::Config { action }) => handle_config(action, &base_dir),
-        Some(Commands::Search { query, limit }) => handle_search(&query, limit),
+        Some(Commands::Search {
+            query,
+            limit,
+            source,
+            min_stars,
+            keywords,
+            topic,
+            preset,
+            sort,
+            refresh,
+        }) => handle_search(
+            &base_dir, &query, limit, &source, min_stars, keywords, topic, preset, &sort, refresh,
+        ),
+        Some(Commands::Hub { action }) => handle_hub(action, &base_dir),
+        Some(Commands::Channel { action }) => handle_channel(action, &base_dir),
         Some(Commands::Completions { shell }) => {
             handle_completions(shell);
             Ok(())
@@ -194,104 +208,336 @@ fn resolve_base_dir(cli_base: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".dot-agent"))
 }
 
-fn handle_search(query: &str, limit: usize) -> Result<()> {
-    use std::process::Command;
+#[allow(clippy::too_many_arguments)]
+fn handle_search(
+    base_dir: &Path,
+    query: &str,
+    limit: usize,
+    channel_filter: &str,
+    min_stars: Option<u64>,
+    keywords: Vec<String>,
+    topic: Option<String>,
+    _preset: Option<String>,
+    sort: &str,
+    _refresh: bool,
+) -> Result<()> {
+    use dot_agent_core::channel::{ChannelManager, ChannelType, SearchOptions};
 
-    // Expand query with related keywords (pick best match)
-    let query_lower = query.to_lowercase();
-    let has_claude = query_lower.contains("claude");
-    let has_skills = query_lower.contains("skills") || query_lower.contains("skill");
-
-    let search_query = match (has_claude, has_skills) {
-        (true, true) => query.to_string(),
-        (true, false) => format!("{} skills", query),
-        (false, true) => format!("{} claude", query),
-        (false, false) => format!("{} claude skills", query),
+    // Build channel filter
+    let channels: Vec<String> = match channel_filter.to_lowercase().as_str() {
+        "github" | "gh" => vec!["github".to_string()],
+        "all" | "" => vec![], // Empty means all enabled
+        other => vec![other.to_string()],
     };
 
-    let output = Command::new("gh")
-        .args([
-            "search",
-            "repos",
-            &search_query,
-            "--limit",
-            &limit.to_string(),
-            "--json",
-            "name,owner,description,url,stargazersCount",
-        ])
-        .output();
+    let options = SearchOptions {
+        limit,
+        channels,
+        min_stars,
+        keywords,
+        topic,
+        sort: Some(sort.to_string()),
+    };
 
-    match output {
-        Ok(output) if output.status.success() => {
-            let json: serde_json::Value =
-                serde_json::from_slice(&output.stdout).unwrap_or_default();
+    // Create channel manager
+    let manager = ChannelManager::new(base_dir.to_path_buf())?;
 
-            if let Some(repos) = json.as_array() {
-                if repos.is_empty() {
-                    println!("No results found for: {}", query);
-                    return Ok(());
+    // Perform search
+    let results = manager.search(query, &options)?;
+
+    if results.is_empty() {
+        println!("No results found for: {}", query);
+        let searchable = manager.registry().list_searchable();
+        if searchable.len() <= 1 {
+            println!();
+            println!("{}", "Tip: Add Awesome Lists for more results:".dimmed());
+            println!(
+                "  {}",
+                "dot-agent channel add https://github.com/webpro/awesome-dotfiles".dimmed()
+            );
+        }
+        return Ok(());
+    }
+
+    println!();
+    println!("{}", "Search Results:".cyan().bold());
+    println!();
+
+    for (i, profile_ref) in results.iter().enumerate() {
+        let stars_str = profile_ref
+            .stars
+            .map(|s| format!("★{}", s).yellow().to_string())
+            .unwrap_or_default();
+
+        // Get channel type for badge
+        let channel_type = manager
+            .registry()
+            .get(&profile_ref.channel)
+            .map(|c| c.channel_type)
+            .unwrap_or(ChannelType::Direct);
+
+        let source_badge = match channel_type {
+            ChannelType::GitHubGlobal => "[GH]".green(),
+            ChannelType::AwesomeList => "[AL]".blue(),
+            _ => "[??]".dimmed(),
+        };
+
+        let desc: String = profile_ref.description.chars().take(57).collect();
+        let desc = if profile_ref.description.chars().count() > 60 {
+            format!("{}...", desc)
+        } else {
+            profile_ref.description.clone()
+        };
+
+        println!(
+            "{}. {} {}/{} {} {}",
+            (i + 1).to_string().bold(),
+            source_badge,
+            profile_ref.owner.yellow(),
+            profile_ref.name.cyan(),
+            stars_str,
+            desc
+        );
+        println!("   {}", profile_ref.url.dimmed());
+        println!();
+    }
+
+    println!("{}", "To import:".dimmed());
+    println!(
+        "  {}",
+        "dot-agent profile import <url> --name <profile-name>".dimmed()
+    );
+
+    Ok(())
+}
+
+fn handle_hub(action: HubAction, base_dir: &Path) -> Result<()> {
+    use dot_agent_core::channel::{Hub, HubRegistry};
+
+    let mut registry = HubRegistry::load(base_dir).unwrap_or_else(|_| HubRegistry::with_official());
+
+    match action {
+        HubAction::Add { url, name } => {
+            // Derive name from URL if not provided
+            let hub_name = name.unwrap_or_else(|| {
+                url.trim_end_matches('/')
+                    .trim_end_matches(".git")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("hub")
+                    .to_string()
+            });
+
+            let hub = Hub::new(&hub_name, &url);
+            registry.add(hub)?;
+            registry.save(base_dir)?;
+
+            println!();
+            println!("{} {} ({})", "Added hub:".green(), hub_name.cyan(), url);
+        }
+        HubAction::List => {
+            let hubs = registry.list();
+
+            if hubs.is_empty() {
+                println!("No hubs registered.");
+                return Ok(());
+            }
+
+            println!();
+            println!("{}", "Registered Hubs:".cyan().bold());
+            println!();
+
+            for hub in hubs {
+                let default_badge = if hub.is_default {
+                    " (default)".yellow().to_string()
+                } else {
+                    String::new()
+                };
+                println!("  {}{}", hub.name.cyan(), default_badge);
+                println!("    URL: {}", hub.url.dimmed());
+                if let Some(desc) = &hub.description {
+                    println!("    {}", desc.dimmed());
                 }
-
                 println!();
-                println!("{}", "Search Results:".cyan().bold());
+            }
+        }
+        HubAction::Remove { name } => {
+            let removed = registry.remove(&name)?;
+            registry.save(base_dir)?;
+
+            println!();
+            println!("{} {}", "Removed hub:".red(), removed.name);
+        }
+        HubAction::Refresh { name } => {
+            let hubs: Vec<_> = if let Some(n) = name {
+                registry.get(&n).into_iter().cloned().collect()
+            } else {
+                registry.list().to_vec()
+            };
+
+            if hubs.is_empty() {
+                println!("No hubs to refresh.");
+                return Ok(());
+            }
+
+            println!();
+            println!("Refreshing hubs...");
+
+            for hub in &hubs {
+                print!("  {} ... ", hub.name);
+                // TODO: Implement actual refresh (fetch channels.toml from hub)
+                println!("{}", "OK".green());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
+    use dot_agent_core::channel::{Channel, ChannelRegistry, HubRegistry};
+
+    let mut registry = ChannelRegistry::load(base_dir).unwrap_or_default();
+
+    match action {
+        ChannelAction::Discover => {
+            let hub_registry =
+                HubRegistry::load(base_dir).unwrap_or_else(|_| HubRegistry::with_official());
+
+            println!();
+            println!("{}", "Available Channels:".cyan().bold());
+            println!();
+
+            for hub in hub_registry.list() {
+                println!("From hub: {} {}", hub.name.yellow(), hub.url.dimmed());
+                // TODO: Fetch and parse channels from hub
+                println!("  (channel discovery not yet implemented)");
                 println!();
+            }
 
-                for (i, repo) in repos.iter().enumerate() {
-                    let name = repo["name"].as_str().unwrap_or("?");
-                    let owner = repo["owner"]["login"].as_str().unwrap_or("?");
-                    let desc = repo["description"]
-                        .as_str()
-                        .unwrap_or("No description")
-                        .chars()
-                        .take(60)
-                        .collect::<String>();
-                    let stars = repo["stargazersCount"].as_u64().unwrap_or(0);
-                    let url = repo["url"].as_str().unwrap_or("");
+            println!("{}", "Popular Awesome Lists:".cyan().bold());
+            println!();
+            println!("  {} - Dotfiles resources", "awesome-dotfiles".cyan());
+            println!("    dot-agent channel add https://github.com/webpro/awesome-dotfiles");
+            println!();
+            println!("  {} - Neovim plugins", "awesome-neovim".cyan());
+            println!("    dot-agent channel add https://github.com/rockerBOO/awesome-neovim");
+            println!();
+        }
+        ChannelAction::Add {
+            name_or_url,
+            hub,
+            name,
+        } => {
+            let channel =
+                if name_or_url.starts_with("http://") || name_or_url.starts_with("https://") {
+                    // Direct URL
+                    let channel_name = name.unwrap_or_else(|| {
+                        name_or_url
+                            .trim_end_matches('/')
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("channel")
+                            .to_string()
+                    });
+                    Channel::from_url(&channel_name, &name_or_url)
+                } else if let Some(hub_name) = hub {
+                    // From hub
+                    let channel_name = name.unwrap_or_else(|| name_or_url.clone());
+                    Channel::from_hub(&channel_name, &hub_name, &name_or_url)
+                } else {
+                    // Assume it's a channel name from official hub
+                    let channel_name = name.unwrap_or_else(|| name_or_url.clone());
+                    Channel::from_hub(&channel_name, "official", &name_or_url)
+                };
 
-                    println!(
-                        "{}. {}/{} {} {}",
-                        (i + 1).to_string().bold(),
-                        owner.yellow(),
-                        name.cyan(),
-                        format!("★{}", stars).yellow(),
-                        if desc.len() >= 60 {
-                            format!("{}...", desc)
-                        } else {
-                            desc
-                        }
-                    );
-                    println!("   {}", url.dimmed());
-                    println!();
-                }
+            let channel_name = channel.name.clone();
+            registry.add(channel)?;
+            registry.save(base_dir)?;
 
-                println!("{}", "To import:".dimmed());
+            println!();
+            println!("{} {}", "Added channel:".green(), channel_name.cyan());
+        }
+        ChannelAction::List => {
+            let channels = registry.list();
+
+            if channels.is_empty() {
+                println!("No channels registered.");
+                println!();
+                println!("{}", "Add channels with:".dimmed());
                 println!(
                     "  {}",
-                    "dot-agent profile import <url> --name <profile-name>".dimmed()
+                    "dot-agent channel add https://github.com/webpro/awesome-dotfiles".dimmed()
                 );
+                println!(
+                    "  {}",
+                    "dot-agent channel discover  # Show available channels".dimmed()
+                );
+                return Ok(());
+            }
+
+            println!();
+            println!("{}", "Registered Channels:".cyan().bold());
+            println!();
+
+            for channel in channels {
+                let status = if channel.enabled {
+                    "enabled".green()
+                } else {
+                    "disabled".yellow()
+                };
+                println!(
+                    "  {} [{}] ({})",
+                    channel.name.cyan(),
+                    channel.channel_type,
+                    status
+                );
+                if let Some(url) = channel.source.url() {
+                    println!("    URL: {}", url.dimmed());
+                }
+                println!();
             }
         }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("gh: command not found") || stderr.contains("not found") {
-                eprintln!(
-                    "{} GitHub CLI (gh) not found. Install: {}",
-                    "[ERROR]".red().bold(),
-                    "brew install gh".cyan()
-                );
-            } else {
-                eprintln!("{} {}", "[ERROR]".red().bold(), stderr);
-            }
+        ChannelAction::Remove { name } => {
+            let removed = registry.remove(&name)?;
+            registry.save(base_dir)?;
+
+            println!();
+            println!("{} {}", "Removed channel:".red(), removed.name);
         }
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "{} GitHub CLI (gh) not found. Install: {}",
-                    "[ERROR]".red().bold(),
-                    "brew install gh".cyan()
-                );
+        ChannelAction::Enable { name } => {
+            registry.enable(&name)?;
+            registry.save(base_dir)?;
+
+            println!();
+            println!("{} {}", "Enabled channel:".green(), name.cyan());
+        }
+        ChannelAction::Disable { name } => {
+            registry.disable(&name)?;
+            registry.save(base_dir)?;
+
+            println!();
+            println!("{} {}", "Disabled channel:".yellow(), name);
+        }
+        ChannelAction::Refresh { name } => {
+            let channels: Vec<_> = if let Some(n) = name {
+                registry.get(&n).into_iter().cloned().collect()
             } else {
-                return Err(e.into());
+                registry.list().to_vec()
+            };
+
+            if channels.is_empty() {
+                println!("No channels to refresh.");
+                return Ok(());
+            }
+
+            println!();
+            println!("Refreshing channels...");
+
+            for channel in &channels {
+                print!("  {} ... ", channel.name);
+                // TODO: Implement actual refresh
+                println!("{}", "OK".green());
             }
         }
     }
@@ -405,13 +651,34 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
                 println!();
             }
         }
-        ProfileAction::Show { name } => {
+        ProfileAction::Show { name, lines } => {
             let profile = manager.get_profile(&name)?;
 
             println!();
             println!("Profile: {}", profile.name.cyan().bold());
             println!("Path: {}", profile.path.display());
             println!();
+
+            // Show README if exists
+            let readme_path = profile.path.join("README.md");
+            if readme_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&readme_path) {
+                    println!("{}", "README.md".green().bold());
+                    println!("{}", "─".repeat(60).dimmed());
+                    for (i, line) in content.lines().take(lines).enumerate() {
+                        println!("{}", line);
+                        if i + 1 == lines && content.lines().count() > lines {
+                            println!(
+                                "{}",
+                                format!("... ({} more lines)", content.lines().count() - lines)
+                                    .dimmed()
+                            );
+                        }
+                    }
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!();
+                }
+            }
 
             // Group files by directory
             let files = profile.list_files()?;

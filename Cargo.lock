@@ -802,6 +802,7 @@ dependencies = [
 name = "dot-agent-cli"
 version = "0.3.1"
 dependencies = [
+ "chrono",
  "clap",
  "clap_complete",
  "colored",
@@ -823,6 +824,7 @@ dependencies = [
  "glob",
  "hex",
  "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",

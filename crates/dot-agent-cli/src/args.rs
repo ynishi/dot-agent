@@ -51,7 +51,7 @@ pub enum Commands {
         action: ConfigAction,
     },
 
-    /// Search for skills/profiles on GitHub
+    /// Search for skills/profiles across registered sources
     Search {
         /// Search query (e.g., "rust tdd", "nextjs")
         query: String,
@@ -59,6 +59,46 @@ pub enum Commands {
         /// Maximum results to show
         #[arg(short, long, default_value = "10")]
         limit: usize,
+
+        /// Filter by source type (github, awesome, all)
+        #[arg(short, long, default_value = "all")]
+        source: String,
+
+        /// Minimum stars (GitHub only)
+        #[arg(long)]
+        min_stars: Option<u64>,
+
+        /// Additional keywords to include in search
+        #[arg(short, long)]
+        keywords: Vec<String>,
+
+        /// Search by GitHub topic (e.g., dotfiles, neovim, claude)
+        #[arg(short, long)]
+        topic: Option<String>,
+
+        /// Use preset search (claude-config, dotfiles, neovim, devenv)
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Sort order (stars, updated, forks)
+        #[arg(long, default_value = "stars")]
+        sort: String,
+
+        /// Refresh cache for Awesome Lists
+        #[arg(long)]
+        refresh: bool,
+    },
+
+    /// Manage hubs (repositories that aggregate channels)
+    Hub {
+        #[command(subcommand)]
+        action: HubAction,
+    },
+
+    /// Manage channels (profile sources)
+    Channel {
+        #[command(subcommand)]
+        action: ChannelAction,
     },
 
     /// Generate shell completions
@@ -374,10 +414,14 @@ pub enum ProfileAction {
     /// List all profiles
     List,
 
-    /// Show profile details
+    /// Show profile details (local or GitHub)
     Show {
-        /// Profile name
+        /// Profile name or GitHub URL/repo (e.g., "my-profile" or "user/repo")
         name: String,
+
+        /// Number of README lines to show for GitHub repos
+        #[arg(long, default_value = "20")]
+        lines: usize,
     },
 
     /// Remove a profile
@@ -599,4 +643,79 @@ pub enum ConfigAction {
 
     /// Initialize config file with defaults
     Init,
+}
+
+#[derive(Subcommand)]
+pub enum HubAction {
+    /// Add a hub repository
+    Add {
+        /// Hub URL (GitHub repository)
+        url: String,
+
+        /// Hub name (default: derived from URL)
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+
+    /// List registered hubs
+    List,
+
+    /// Remove a hub
+    Remove {
+        /// Hub name
+        name: String,
+    },
+
+    /// Refresh hub cache (fetch latest channel list)
+    Refresh {
+        /// Hub name (refresh all if not specified)
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ChannelAction {
+    /// Discover available channels from all hubs
+    Discover,
+
+    /// Add/enable a channel
+    Add {
+        /// Channel name (from hub) or URL (direct)
+        name_or_url: String,
+
+        /// Hub to use (for hub channels)
+        #[arg(short = 'H', long)]
+        hub: Option<String>,
+
+        /// Custom name for the channel
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+
+    /// List enabled channels
+    List,
+
+    /// Remove/disable a channel
+    Remove {
+        /// Channel name
+        name: String,
+    },
+
+    /// Enable a disabled channel
+    Enable {
+        /// Channel name
+        name: String,
+    },
+
+    /// Disable a channel (keep config but don't use)
+    Disable {
+        /// Channel name
+        name: String,
+    },
+
+    /// Refresh channel cache
+    Refresh {
+        /// Channel name (refresh all if not specified)
+        name: Option<String>,
+    },
 }

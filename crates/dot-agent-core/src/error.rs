@@ -68,6 +68,33 @@ pub enum DotAgentError {
 
     #[error("Config key not found: {key}")]
     ConfigKeyNotFound { key: String },
+
+    #[error("Config parse error: {message}")]
+    ConfigParseSimple { message: String },
+
+    #[error("GitHub CLI (gh) not found. Install with: brew install gh")]
+    GitHubCliNotFound,
+
+    #[error("GitHub API error: {message}")]
+    GitHubApiError { message: String },
+
+    #[error("Hub already exists: {name}")]
+    HubAlreadyExists { name: String },
+
+    #[error("Hub not found: {name}")]
+    HubNotFound { name: String },
+
+    #[error("Cannot remove default hub")]
+    CannotRemoveDefaultHub,
+
+    #[error("Channel already exists: {name}")]
+    ChannelAlreadyExists { name: String },
+
+    #[error("Channel not found: {name}")]
+    ChannelNotFound { name: String },
+
+    #[error("Cannot remove built-in channel: {name}")]
+    CannotRemoveBuiltinChannel { name: String },
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -88,6 +115,15 @@ impl DotAgentError {
             Self::SnapshotNotFound { .. } => 12,
             Self::ConfigParse { .. } => 13,
             Self::ConfigKeyNotFound { .. } => 14,
+            Self::ConfigParseSimple { .. } => 15,
+            Self::GitHubCliNotFound => 16,
+            Self::GitHubApiError { .. } => 17,
+            Self::HubAlreadyExists { .. } => 18,
+            Self::HubNotFound { .. } => 19,
+            Self::CannotRemoveDefaultHub => 20,
+            Self::ChannelAlreadyExists { .. } => 21,
+            Self::ChannelNotFound { .. } => 22,
+            Self::CannotRemoveBuiltinChannel { .. } => 23,
             _ => 1,
         }
     }

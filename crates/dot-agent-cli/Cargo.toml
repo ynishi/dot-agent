@@ -21,6 +21,7 @@ gui = ["eframe", "egui-cha", "egui-cha-ds", "rfd"]
 
 [dependencies]
 dot-agent-core = { path = "../dot-agent-core", version = "0.3.1" }
+chrono.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 colored.workspace = true
