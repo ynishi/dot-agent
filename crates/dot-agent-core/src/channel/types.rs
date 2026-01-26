@@ -82,6 +82,8 @@ pub enum ChannelType {
     Hub,
     /// Direct URL (GitHub repo, etc.)
     Direct,
+    /// Claude Code Plugin Marketplace
+    Marketplace,
 }
 
 impl ChannelType {
@@ -91,12 +93,13 @@ impl ChannelType {
             Self::AwesomeList => "awesome",
             Self::Hub => "hub",
             Self::Direct => "direct",
+            Self::Marketplace => "marketplace",
         }
     }
 
     /// Whether this channel type supports search
     pub fn is_searchable(&self) -> bool {
-        matches!(self, Self::GitHubGlobal | Self::AwesomeList)
+        matches!(self, Self::GitHubGlobal | Self::AwesomeList | Self::Marketplace)
     }
 }
 
@@ -131,6 +134,11 @@ pub enum ChannelSource {
         /// When it was imported
         imported_at: String,
     },
+    /// Claude Code Plugin Marketplace
+    Marketplace {
+        /// GitHub repo (e.g., "anthropics/claude-plugins-official")
+        repo: String,
+    },
 }
 
 impl ChannelSource {
@@ -160,6 +168,11 @@ impl ChannelSource {
         }
     }
 
+    /// Create a Marketplace source
+    pub fn marketplace(repo: impl Into<String>) -> Self {
+        Self::Marketplace { repo: repo.into() }
+    }
+
     /// Get the URL if available
     pub fn url(&self) -> Option<&str> {
         match self {
@@ -167,6 +180,15 @@ impl ChannelSource {
             Self::Hub { .. } => None,
             Self::Url { url } => Some(url),
             Self::Anonymous { url, .. } => Some(url),
+            Self::Marketplace { .. } => None,
+        }
+    }
+
+    /// Get the GitHub repo if marketplace
+    pub fn repo(&self) -> Option<&str> {
+        match self {
+            Self::Marketplace { repo } => Some(repo),
+            _ => None,
         }
     }
 }
@@ -270,6 +292,19 @@ impl Channel {
             channel_type: ChannelType::Direct,
             source: ChannelSource::anonymous(url_str),
             description: None,
+            added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            enabled: true,
+            builtin: false,
+        }
+    }
+
+    /// Create a Claude Code Plugin Marketplace channel
+    pub fn claude_plugin_github(name: impl Into<String>, repo: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            channel_type: ChannelType::Marketplace,
+            source: ChannelSource::marketplace(repo),
+            description: Some("Claude Code Plugin Marketplace".to_string()),
             added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             enabled: true,
             builtin: false,

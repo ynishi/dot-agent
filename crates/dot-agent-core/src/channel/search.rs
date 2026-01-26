@@ -9,7 +9,7 @@ use std::process::Command;
 use crate::error::{DotAgentError, Result};
 
 use super::channel_registry::ChannelRegistry;
-use super::types::{Channel, ChannelType, ProfileRef, SearchOptions};
+use super::types::{Channel, ChannelSource, ChannelType, ProfileRef, SearchOptions};
 
 /// Channel manager for search operations
 pub struct ChannelManager {
@@ -89,6 +89,7 @@ impl ChannelManager {
         match channel.channel_type {
             ChannelType::GitHubGlobal => self.search_github(channel, query, options),
             ChannelType::AwesomeList => self.search_awesome_list(channel, query, options),
+            ChannelType::Marketplace => self.search_marketplace(channel, query, options),
             ChannelType::Hub | ChannelType::Direct => {
                 // Not searchable
                 Ok(Vec::new())
@@ -395,6 +396,74 @@ impl ChannelManager {
         }
 
         Ok(())
+    }
+
+    /// Search a Marketplace channel
+    fn search_marketplace(
+        &self,
+        channel: &Channel,
+        query: &str,
+        options: &SearchOptions,
+    ) -> Result<Vec<ProfileRef>> {
+        let repo = match &channel.source {
+            ChannelSource::Marketplace { repo } => repo,
+            _ => return Ok(Vec::new()),
+        };
+
+        // TODO: Implement full marketplace search
+        // For now, return placeholder indicating marketplace support
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::new();
+
+        // Check if marketplace content is cached
+        let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, &channel.name);
+        let cache_file = cache_dir.join("marketplace.json");
+
+        if cache_file.exists() {
+            // Parse cached marketplace data
+            if let Ok(content) = std::fs::read_to_string(&cache_file) {
+                // Simple JSON parsing for plugins array
+                // Format: { "plugins": [{ "name": "...", "description": "..." }, ...] }
+                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(plugins) = data.get("plugins").and_then(|p| p.as_array()) {
+                        for plugin in plugins {
+                            let name = plugin
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or_default();
+                            let description = plugin
+                                .get("description")
+                                .and_then(|d| d.as_str())
+                                .unwrap_or_default();
+
+                            // Filter by query
+                            if query.is_empty()
+                                || name.to_lowercase().contains(&query_lower)
+                                || description.to_lowercase().contains(&query_lower)
+                            {
+                                results.push(ProfileRef {
+                                    id: format!("marketplace:{}@{}", name, channel.name),
+                                    name: name.to_string(),
+                                    owner: repo.split('/').next().unwrap_or("unknown").to_string(),
+                                    description: description.to_string(),
+                                    url: format!("https://github.com/{}", repo),
+                                    stars: None,
+                                    channel: channel.name.clone(),
+                                    metadata: HashMap::new(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply limit
+        if options.limit > 0 {
+            results.truncate(options.limit);
+        }
+
+        Ok(results)
     }
 }
 

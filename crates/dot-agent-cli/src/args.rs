@@ -679,12 +679,30 @@ pub enum ChannelAction {
     Discover,
 
     /// Add/enable a channel
+    ///
+    /// Use type flags (-m, -a, -d, -H) for explicit channel type:
+    ///   -m/--marketplace: Claude Code Plugin Marketplace
+    ///   -a/--awesome: Awesome List (curated markdown)
+    ///   -d/--direct: Direct GitHub repository
+    ///   -H/--hub: Channel from a registered Hub
     Add {
-        /// Channel name (from hub) or URL (direct)
-        name_or_url: String,
+        /// URL or name (GitHub repo, marketplace, awesome list, or hub channel)
+        source: String,
 
-        /// Hub to use (for hub channels)
-        #[arg(short = 'H', long)]
+        /// Add as Marketplace (Claude Code Plugin)
+        #[arg(short = 'm', long, group = "channel_type")]
+        marketplace: bool,
+
+        /// Add as Awesome List
+        #[arg(short = 'a', long, group = "channel_type")]
+        awesome: bool,
+
+        /// Add as Direct repository
+        #[arg(short = 'd', long, group = "channel_type")]
+        direct: bool,
+
+        /// Add from Hub (specify hub name)
+        #[arg(short = 'H', long, group = "channel_type")]
         hub: Option<String>,
 
         /// Custom name for the channel

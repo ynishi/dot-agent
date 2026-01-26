@@ -425,38 +425,100 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
             println!();
         }
         ChannelAction::Add {
-            name_or_url,
+            source,
+            marketplace,
+            awesome,
+            direct,
             hub,
             name,
         } => {
-            let channel =
-                if name_or_url.starts_with("http://") || name_or_url.starts_with("https://") {
-                    // Direct URL
-                    let channel_name = name.unwrap_or_else(|| {
-                        name_or_url
-                            .trim_end_matches('/')
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or("channel")
-                            .to_string()
-                    });
-                    Channel::from_url(&channel_name, &name_or_url)
-                } else if let Some(hub_name) = hub {
-                    // From hub
-                    let channel_name = name.unwrap_or_else(|| name_or_url.clone());
-                    Channel::from_hub(&channel_name, &hub_name, &name_or_url)
+            // Determine channel type from flags or auto-detect
+            let (channel, type_hint) = if marketplace {
+                // Marketplace: source is GitHub repo like "anthropics/claude-plugins-official"
+                let channel_name = name.unwrap_or_else(|| {
+                    source
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("marketplace")
+                        .to_string()
+                });
+                (
+                    Channel::claude_plugin_github(&channel_name, &source),
+                    "marketplace",
+                )
+            } else if awesome {
+                // Awesome List
+                let channel_name = name.unwrap_or_else(|| {
+                    source
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("awesome")
+                        .to_string()
+                });
+                (Channel::awesome_list(&channel_name, &source), "awesome")
+            } else if direct {
+                // Direct repository
+                let channel_name = name.unwrap_or_else(|| {
+                    source
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("direct")
+                        .to_string()
+                });
+                (Channel::from_url(&channel_name, &source), "direct")
+            } else if let Some(hub_name) = hub {
+                // From Hub
+                let channel_name = name.unwrap_or_else(|| source.clone());
+                (
+                    Channel::from_hub(&channel_name, &hub_name, &source),
+                    "hub",
+                )
+            } else {
+                // Auto-detect (deprecated)
+                eprintln!(
+                    "{} Auto-detection is deprecated. Use explicit flags: -m (marketplace), -a (awesome), -d (direct), -H (hub)",
+                    "[WARN]".yellow().bold()
+                );
+
+                let channel_name = name.unwrap_or_else(|| {
+                    source
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("channel")
+                        .to_string()
+                });
+
+                if source.starts_with("http://") || source.starts_with("https://") {
+                    // Guess based on URL
+                    if source.contains("awesome") {
+                        (Channel::awesome_list(&channel_name, &source), "awesome (auto)")
+                    } else {
+                        (Channel::from_url(&channel_name, &source), "direct (auto)")
+                    }
                 } else {
-                    // Assume it's a channel name from official hub
-                    let channel_name = name.unwrap_or_else(|| name_or_url.clone());
-                    Channel::from_hub(&channel_name, "official", &name_or_url)
-                };
+                    // Assume hub channel
+                    (
+                        Channel::from_hub(&channel_name, "official", &source),
+                        "hub (auto)",
+                    )
+                }
+            };
 
             let channel_name = channel.name.clone();
             registry.add(channel)?;
             registry.save(base_dir)?;
 
             println!();
-            println!("{} {}", "Added channel:".green(), channel_name.cyan());
+            println!(
+                "{} {} [{}]",
+                "Added channel:".green(),
+                channel_name.cyan(),
+                type_hint
+            );
         }
         ChannelAction::List => {
             let channels = registry.list();
