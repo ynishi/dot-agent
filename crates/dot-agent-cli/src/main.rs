@@ -6,6 +6,7 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use colored::Colorize;
 
+use dot_agent_core::channel::ChannelManager;
 use dot_agent_core::config::Config;
 use dot_agent_core::installer::{FileStatus, Installer};
 use dot_agent_core::metadata::Metadata;
@@ -223,10 +224,33 @@ fn handle_search(
 ) -> Result<()> {
     use dot_agent_core::channel::{ChannelManager, ChannelType, SearchOptions};
 
+    // Create channel manager first to resolve channel type filters
+    let manager = ChannelManager::new(base_dir.to_path_buf())?;
+
     // Build channel filter
     let channels: Vec<String> = match channel_filter.to_lowercase().as_str() {
         "github" | "gh" => vec!["github".to_string()],
         "all" | "" => vec![], // Empty means all enabled
+        "marketplace" | "mp" => {
+            // Filter to all marketplace channels
+            manager
+                .registry()
+                .list_enabled()
+                .iter()
+                .filter(|c| c.channel_type == ChannelType::Marketplace)
+                .map(|c| c.name.clone())
+                .collect()
+        }
+        "awesome" | "al" => {
+            // Filter to all awesome list channels
+            manager
+                .registry()
+                .list_enabled()
+                .iter()
+                .filter(|c| c.channel_type == ChannelType::AwesomeList)
+                .map(|c| c.name.clone())
+                .collect()
+        }
         other => vec![other.to_string()],
     };
 
@@ -238,9 +262,6 @@ fn handle_search(
         topic,
         sort: Some(sort.to_string()),
     };
-
-    // Create channel manager
-    let manager = ChannelManager::new(base_dir.to_path_buf())?;
 
     // Perform search
     let results = manager.search(query, &options)?;
@@ -279,6 +300,7 @@ fn handle_search(
         let source_badge = match channel_type {
             ChannelType::GitHubGlobal => "[GH]".green(),
             ChannelType::AwesomeList => "[AL]".blue(),
+            ChannelType::Marketplace => "[MP]".magenta(),
             _ => "[??]".dimmed(),
         };
 
@@ -582,6 +604,8 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
             println!("{} {}", "Disabled channel:".yellow(), name);
         }
         ChannelAction::Refresh { name } => {
+            let channel_mgr = ChannelManager::new(base_dir.to_path_buf())?;
+
             let channels: Vec<_> = if let Some(n) = name {
                 registry.get(&n).into_iter().cloned().collect()
             } else {
@@ -598,8 +622,12 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
 
             for channel in &channels {
                 print!("  {} ... ", channel.name);
-                // TODO: Implement actual refresh
-                println!("{}", "OK".green());
+                io::stdout().flush()?;
+
+                match channel_mgr.refresh_channel(&channel.name) {
+                    Ok(()) => println!("{}", "OK".green()),
+                    Err(e) => println!("{} {}", "FAILED".red(), e),
+                }
             }
         }
     }
@@ -855,11 +883,24 @@ fn handle_install(
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
 
-    let profile = manager.get_profile(profile_name)?;
+    // Check if this is a marketplace plugin reference (plugin@marketplace format)
+    let (actual_profile_name, profile) = if let Some((plugin, marketplace)) =
+        parse_marketplace_ref(profile_name)
+    {
+        // Fetch and import plugin from marketplace
+        let profile =
+            import_marketplace_plugin(base_dir, &plugin, &marketplace, &manager, force)?;
+        (profile.name.clone(), profile)
+    } else {
+        // Normal local profile
+        let profile = manager.get_profile(profile_name)?;
+        (profile_name.to_string(), profile)
+    };
+
     let target_dir = installer.resolve_target(target, global)?;
 
     println!();
-    println!("Profile: {}", profile_name.cyan());
+    println!("Profile: {}", actual_profile_name.cyan());
     println!("Target: {}", target_dir.display());
     if dry_run {
         println!("{}", "(dry run)".yellow());
@@ -926,7 +967,7 @@ fn handle_install(
                 Ok(registrar) => {
                     match registrar.register_plugin(
                         &profile.path,
-                        profile_name,
+                        &actual_profile_name,
                         scope,
                         target.map(|p| p.parent().unwrap_or(p)),
                     ) {
@@ -2298,4 +2339,182 @@ fn handle_switch(
     }
 
     Ok(())
+}
+
+/// Parse a marketplace plugin reference in the format "plugin@marketplace"
+/// Returns (plugin_name, marketplace_name) if the format matches
+fn parse_marketplace_ref(input: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = input.splitn(2, '@').collect();
+    if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        None
+    }
+}
+
+/// Import a plugin from a marketplace channel as a local profile
+fn import_marketplace_plugin(
+    base_dir: &Path,
+    plugin_name: &str,
+    marketplace_name: &str,
+    manager: &ProfileManager,
+    force: bool,
+) -> Result<dot_agent_core::profile::Profile> {
+    use dot_agent_core::channel::{ChannelSource, ChannelType};
+    use std::fs;
+
+    println!();
+    println!(
+        "Fetching plugin {} from marketplace {}...",
+        plugin_name.cyan(),
+        marketplace_name.yellow()
+    );
+
+    // Get channel manager and find the marketplace
+    let channel_mgr = ChannelManager::new(base_dir.to_path_buf())?;
+
+    let channel = channel_mgr
+        .registry()
+        .get(marketplace_name)
+        .ok_or_else(|| DotAgentError::ChannelNotFound {
+            name: marketplace_name.to_string(),
+        })?;
+
+    // Verify it's a marketplace channel
+    if channel.channel_type != ChannelType::Marketplace {
+        return Err(DotAgentError::GitHubApiError {
+            message: format!("'{}' is not a marketplace channel", marketplace_name),
+        });
+    }
+
+    // Get repo from channel source
+    let repo = match &channel.source {
+        ChannelSource::Marketplace { repo } => repo.clone(),
+        _ => {
+            return Err(DotAgentError::GitHubApiError {
+                message: "Invalid marketplace channel source".to_string(),
+            })
+        }
+    };
+
+    // Get plugin info from marketplace catalog
+    let plugin_info = channel_mgr
+        .get_marketplace_plugin(marketplace_name, plugin_name)?
+        .ok_or_else(|| DotAgentError::GitHubApiError {
+            message: format!(
+                "Plugin '{}' not found in marketplace '{}'. Run 'channel refresh {}' first.",
+                plugin_name, marketplace_name, marketplace_name
+            ),
+        })?;
+
+    println!("  Plugin: {}", plugin_info.name);
+    if let Some(desc) = &plugin_info.description {
+        println!("  Description: {}", desc);
+    }
+    let version = plugin_info.version.clone().unwrap_or_else(|| "unknown".to_string());
+    println!("  Version: {}", version);
+
+    // Determine the source URL for the plugin
+    let (plugin_url, is_external) = if let Some(github_repo) = plugin_info.source_github_repo() {
+        // External GitHub repo
+        (format!("https://github.com/{}", github_repo), true)
+    } else if plugin_info.source_path().is_some() {
+        // Relative path within the marketplace repo
+        (format!("https://github.com/{}", repo), false)
+    } else {
+        return Err(DotAgentError::GitHubApiError {
+            message: format!("Plugin '{}' has unsupported source type", plugin_name),
+        });
+    };
+
+    // Profile name for the imported plugin (use plugin name only, @ not allowed in profile names)
+    let profile_name = plugin_name.to_string();
+
+    // Import the plugin as a profile
+    println!("  Importing from: {}", plugin_url);
+
+    // Determine the subdirectory path for the plugin
+    let subdir = if is_external {
+        None
+    } else {
+        plugin_info.source_path().map(|p| {
+            // Remove leading "./" if present
+            p.trim_start_matches("./").to_string()
+        })
+    };
+
+    // Create temp directory for git clone
+    let temp_base = std::env::temp_dir().join("dot-agent-marketplace");
+    fs::create_dir_all(&temp_base)?;
+    let clone_path = temp_base.join(format!("{}-{}", plugin_name, std::process::id()));
+
+    // Clean up if exists
+    if clone_path.exists() {
+        fs::remove_dir_all(&clone_path)?;
+    }
+
+    let clone_result = Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            &plugin_url,
+            clone_path.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(DotAgentError::Io)?;
+
+    if !clone_result.status.success() {
+        return Err(DotAgentError::Git(format!(
+            "Failed to clone {}: {}",
+            plugin_url,
+            String::from_utf8_lossy(&clone_result.stderr)
+        )));
+    }
+
+    // Determine source path (plugin subdirectory if relative path)
+    let source_path = if let Some(sub) = &subdir {
+        clone_path.join(sub)
+    } else {
+        clone_path.clone()
+    };
+
+    if !source_path.exists() {
+        // Cleanup
+        let _ = fs::remove_dir_all(&clone_path);
+        return Err(DotAgentError::TargetNotFound { path: source_path });
+    }
+
+    // Import the plugin directory as a profile using marketplace source
+    let result = manager.import_profile_from_marketplace(
+        &source_path,
+        &profile_name,
+        force,
+        marketplace_name,
+        plugin_name,
+        &version,
+    );
+
+    // Cleanup temp directory
+    let _ = fs::remove_dir_all(&clone_path);
+
+    result?;
+
+    println!("  {} Imported as profile: {}", "[OK]".green(), profile_name);
+
+    // Write inline configuration files if plugin has them (strict: false pattern)
+    if plugin_info.has_inline_config() {
+        let profile = manager.get_profile(&profile_name)?;
+        let written = plugin_info.write_config_files(&profile.path)?;
+        if !written.is_empty() {
+            println!(
+                "  {} Generated config files: {}",
+                "[OK]".green(),
+                written.join(", ")
+            );
+        }
+    }
+
+    // Return the newly imported profile
+    manager.get_profile(&profile_name)
 }

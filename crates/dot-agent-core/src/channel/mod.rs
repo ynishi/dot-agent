@@ -34,5 +34,5 @@ mod types;
 
 pub use channel_registry::ChannelRegistry;
 pub use hub_registry::HubRegistry;
-pub use search::ChannelManager;
+pub use search::{ChannelManager, MarketplacePlugin};
 pub use types::{Channel, ChannelRef, ChannelSource, ChannelType, Hub, ProfileRef, SearchOptions};

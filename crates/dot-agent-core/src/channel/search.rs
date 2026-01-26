@@ -6,10 +6,168 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{DotAgentError, Result};
 
 use super::channel_registry::ChannelRegistry;
 use super::types::{Channel, ChannelSource, ChannelType, ProfileRef, SearchOptions};
+
+/// A plugin entry from a Claude Code Plugin Marketplace
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketplacePlugin {
+    /// Plugin name (kebab-case identifier)
+    pub name: String,
+    /// Plugin description
+    pub description: Option<String>,
+    /// Plugin version
+    pub version: Option<String>,
+    /// Plugin source (relative path or git source object)
+    pub source: serde_json::Value,
+    /// Plugin category
+    pub category: Option<String>,
+    /// Plugin keywords/tags
+    pub keywords: Option<Vec<String>>,
+    /// Plugin author
+    pub author: Option<serde_json::Value>,
+    /// LSP servers configuration (inline definition)
+    pub lsp_servers: Option<serde_json::Value>,
+    /// MCP servers configuration (inline definition)
+    pub mcp_servers: Option<serde_json::Value>,
+    /// Hooks configuration (inline definition)
+    pub hooks: Option<serde_json::Value>,
+    /// Commands configuration (inline definition)
+    pub commands: Option<serde_json::Value>,
+    /// Agents configuration (inline definition)
+    pub agents: Option<serde_json::Value>,
+}
+
+impl MarketplacePlugin {
+    /// Create from JSON value
+    pub fn from_json(value: &serde_json::Value) -> Self {
+        Self {
+            name: value
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            description: value
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            version: value
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            source: value.get("source").cloned().unwrap_or(serde_json::Value::Null),
+            category: value
+                .get("category")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            keywords: value.get("keywords").and_then(|v| {
+                v.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|k| k.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+            }),
+            author: value.get("author").cloned(),
+            lsp_servers: value.get("lspServers").cloned(),
+            mcp_servers: value.get("mcpServers").cloned(),
+            hooks: value.get("hooks").cloned(),
+            commands: value.get("commands").cloned(),
+            agents: value.get("agents").cloned(),
+        }
+    }
+
+    /// Get the source as a relative path (if it's a string)
+    pub fn source_path(&self) -> Option<&str> {
+        self.source.as_str()
+    }
+
+    /// Get the source as a git repo (if it's an object with "source": "github")
+    pub fn source_github_repo(&self) -> Option<&str> {
+        self.source.get("repo").and_then(|v| v.as_str())
+    }
+
+    /// Check if plugin has inline configurations (strict: false pattern)
+    pub fn has_inline_config(&self) -> bool {
+        self.lsp_servers.is_some()
+            || self.mcp_servers.is_some()
+            || self.hooks.is_some()
+            || self.commands.is_some()
+            || self.agents.is_some()
+    }
+
+    /// Write inline configurations to the target directory as separate files
+    pub fn write_config_files(&self, target_dir: &std::path::Path) -> Result<Vec<String>> {
+        use std::fs;
+
+        let mut written_files = Vec::new();
+
+        // Write .lsp.json if lspServers is defined
+        if let Some(lsp) = &self.lsp_servers {
+            let lsp_path = target_dir.join(".lsp.json");
+            let content = serde_json::to_string_pretty(lsp).map_err(|e| {
+                DotAgentError::GitHubApiError {
+                    message: format!("Failed to serialize lspServers: {}", e),
+                }
+            })?;
+            fs::write(&lsp_path, content)?;
+            written_files.push(".lsp.json".to_string());
+        }
+
+        // Write .mcp.json if mcpServers is defined
+        if let Some(mcp) = &self.mcp_servers {
+            let mcp_path = target_dir.join(".mcp.json");
+            let content = serde_json::to_string_pretty(mcp).map_err(|e| {
+                DotAgentError::GitHubApiError {
+                    message: format!("Failed to serialize mcpServers: {}", e),
+                }
+            })?;
+            fs::write(&mcp_path, content)?;
+            written_files.push(".mcp.json".to_string());
+        }
+
+        // Write hooks.json if hooks is defined
+        if let Some(hooks) = &self.hooks {
+            let hooks_path = target_dir.join("hooks.json");
+            let content = serde_json::to_string_pretty(hooks).map_err(|e| {
+                DotAgentError::GitHubApiError {
+                    message: format!("Failed to serialize hooks: {}", e),
+                }
+            })?;
+            fs::write(&hooks_path, content)?;
+            written_files.push("hooks.json".to_string());
+        }
+
+        // Write commands.json if commands is defined
+        if let Some(commands) = &self.commands {
+            let commands_path = target_dir.join("commands.json");
+            let content = serde_json::to_string_pretty(commands).map_err(|e| {
+                DotAgentError::GitHubApiError {
+                    message: format!("Failed to serialize commands: {}", e),
+                }
+            })?;
+            fs::write(&commands_path, content)?;
+            written_files.push("commands.json".to_string());
+        }
+
+        // Write agents.json if agents is defined
+        if let Some(agents) = &self.agents {
+            let agents_path = target_dir.join("agents.json");
+            let content = serde_json::to_string_pretty(agents).map_err(|e| {
+                DotAgentError::GitHubApiError {
+                    message: format!("Failed to serialize agents: {}", e),
+                }
+            })?;
+            fs::write(&agents_path, content)?;
+            written_files.push("agents.json".to_string());
+        }
+
+        Ok(written_files)
+    }
+}
 
 /// Channel manager for search operations
 pub struct ChannelManager {
@@ -386,16 +544,95 @@ impl ChannelManager {
                     name: channel_name.to_string(),
                 })?;
 
-        if let Some(url) = channel.source.url() {
-            let raw_url = Self::to_raw_url(url);
-            let content = Self::fetch_url(&raw_url)?;
+        match &channel.source {
+            ChannelSource::Marketplace { repo } => {
+                self.fetch_marketplace_catalog(repo, channel_name)?;
+            }
+            _ => {
+                if let Some(url) = channel.source.url() {
+                    let raw_url = Self::to_raw_url(url);
+                    let content = Self::fetch_url(&raw_url)?;
 
-            let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
-            std::fs::create_dir_all(&cache_dir)?;
-            std::fs::write(cache_dir.join("content.md"), content)?;
+                    let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
+                    std::fs::create_dir_all(&cache_dir)?;
+                    std::fs::write(cache_dir.join("content.md"), content)?;
+                }
+            }
         }
 
         Ok(())
+    }
+
+    /// Fetch marketplace catalog from GitHub repository
+    ///
+    /// Downloads `.claude-plugin/marketplace.json` from the repository
+    /// and caches it locally.
+    fn fetch_marketplace_catalog(&self, repo: &str, channel_name: &str) -> Result<()> {
+        // Build raw URL: https://raw.githubusercontent.com/{owner}/{repo}/main/.claude-plugin/marketplace.json
+        let raw_url = format!(
+            "https://raw.githubusercontent.com/{}/main/.claude-plugin/marketplace.json",
+            repo
+        );
+
+        let content = Self::fetch_url(&raw_url)?;
+
+        // Validate JSON structure
+        let data: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            DotAgentError::GitHubApiError {
+                message: format!("Invalid marketplace.json: {}", e),
+            }
+        })?;
+
+        // Check required fields
+        if data.get("name").is_none() || data.get("plugins").is_none() {
+            return Err(DotAgentError::GitHubApiError {
+                message: "marketplace.json missing required fields (name, plugins)".to_string(),
+            });
+        }
+
+        // Cache the catalog
+        let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
+        std::fs::create_dir_all(&cache_dir)?;
+        std::fs::write(cache_dir.join("marketplace.json"), content)?;
+
+        Ok(())
+    }
+
+    /// Get a plugin entry from marketplace catalog
+    pub fn get_marketplace_plugin(
+        &self,
+        channel_name: &str,
+        plugin_name: &str,
+    ) -> Result<Option<MarketplacePlugin>> {
+        let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
+        let cache_file = cache_dir.join("marketplace.json");
+
+        if !cache_file.exists() {
+            return Ok(None);
+        }
+
+        let content = std::fs::read_to_string(&cache_file)?;
+        let data: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            DotAgentError::GitHubApiError {
+                message: format!("Invalid marketplace.json: {}", e),
+            }
+        })?;
+
+        let plugins = data
+            .get("plugins")
+            .and_then(|p| p.as_array())
+            .ok_or_else(|| DotAgentError::GitHubApiError {
+                message: "marketplace.json has no plugins array".to_string(),
+            })?;
+
+        for plugin in plugins {
+            let name = plugin.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name == plugin_name {
+                return Ok(Some(MarketplacePlugin::from_json(plugin)));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Search a Marketplace channel
@@ -410,8 +647,6 @@ impl ChannelManager {
             _ => return Ok(Vec::new()),
         };
 
-        // TODO: Implement full marketplace search
-        // For now, return placeholder indicating marketplace support
         let query_lower = query.to_lowercase();
         let mut results = Vec::new();
 
@@ -419,39 +654,52 @@ impl ChannelManager {
         let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, &channel.name);
         let cache_file = cache_dir.join("marketplace.json");
 
-        if cache_file.exists() {
-            // Parse cached marketplace data
-            if let Ok(content) = std::fs::read_to_string(&cache_file) {
-                // Simple JSON parsing for plugins array
-                // Format: { "plugins": [{ "name": "...", "description": "..." }, ...] }
-                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(plugins) = data.get("plugins").and_then(|p| p.as_array()) {
-                        for plugin in plugins {
-                            let name = plugin
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default();
-                            let description = plugin
-                                .get("description")
-                                .and_then(|d| d.as_str())
-                                .unwrap_or_default();
+        // Auto-fetch if cache doesn't exist
+        if !cache_file.exists() {
+            self.fetch_marketplace_catalog(repo, &channel.name)?;
+        }
 
-                            // Filter by query
-                            if query.is_empty()
-                                || name.to_lowercase().contains(&query_lower)
-                                || description.to_lowercase().contains(&query_lower)
-                            {
-                                results.push(ProfileRef {
-                                    id: format!("marketplace:{}@{}", name, channel.name),
-                                    name: name.to_string(),
-                                    owner: repo.split('/').next().unwrap_or("unknown").to_string(),
-                                    description: description.to_string(),
-                                    url: format!("https://github.com/{}", repo),
-                                    stars: None,
-                                    channel: channel.name.clone(),
-                                    metadata: HashMap::new(),
-                                });
+        // Parse cached marketplace data
+        if let Ok(content) = std::fs::read_to_string(&cache_file) {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(plugins) = data.get("plugins").and_then(|p| p.as_array()) {
+                    for plugin in plugins {
+                        let name = plugin
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or_default();
+                        let description = plugin
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or_default();
+                        let version = plugin
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let category = plugin
+                            .get("category")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("");
+
+                        // Filter by query (search in name, description, category)
+                        let text = format!("{} {} {}", name, description, category).to_lowercase();
+                        if query.is_empty() || text.contains(&query_lower) {
+                            let mut metadata = HashMap::new();
+                            metadata.insert("version".to_string(), version.to_string());
+                            if !category.is_empty() {
+                                metadata.insert("category".to_string(), category.to_string());
                             }
+
+                            results.push(ProfileRef {
+                                id: format!("marketplace:{}@{}", name, channel.name),
+                                name: name.to_string(),
+                                owner: repo.split('/').next().unwrap_or("unknown").to_string(),
+                                description: description.to_string(),
+                                url: format!("https://github.com/{}", repo),
+                                stars: None,
+                                channel: channel.name.clone(),
+                                metadata,
+                            });
                         }
                     }
                 }
