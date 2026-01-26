@@ -330,6 +330,7 @@ dot-agent install {}
     }
 
     /// Import a directory as a profile from git
+    #[allow(clippy::too_many_arguments)]
     pub fn import_profile_from_git(
         &self,
         source: &Path,

@@ -90,6 +90,15 @@ impl MarketplacePlugin {
         self.source.get("repo").and_then(|v| v.as_str())
     }
 
+    /// Get the source as a URL (if it's an object with "source": "url")
+    pub fn source_url(&self) -> Option<&str> {
+        if self.source.get("source").and_then(|v| v.as_str()) == Some("url") {
+            self.source.get("url").and_then(|v| v.as_str())
+        } else {
+            None
+        }
+    }
+
     /// Check if plugin has inline configurations (strict: false pattern)
     pub fn has_inline_config(&self) -> bool {
         self.lsp_servers.is_some()
@@ -418,9 +427,16 @@ impl ChannelManager {
             }
         }
 
-        // Fetch from URL
-        let raw_url = Self::to_raw_url(url);
-        let content = Self::fetch_url(&raw_url)?;
+        // Fetch from URL, try main first, then master
+        let content = if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "main"))? {
+            c
+        } else if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "master"))? {
+            c
+        } else {
+            return Err(DotAgentError::GitHubApiError {
+                message: format!("Failed to fetch README from: {} (tried main and master)", url),
+            });
+        };
 
         // Cache it
         std::fs::create_dir_all(&cache_dir)?;
@@ -496,34 +512,66 @@ impl ChannelManager {
         "unknown".to_string()
     }
 
-    /// Convert GitHub URL to raw content URL
-    fn to_raw_url(url: &str) -> String {
+    /// Convert GitHub URL to raw content URL with specified branch
+    fn to_raw_url(url: &str, branch: &str) -> String {
         if url.contains("github.com") && !url.contains("raw.githubusercontent.com") {
             // https://github.com/user/repo -> raw README
             let url = url
                 .replace("github.com", "raw.githubusercontent.com")
                 .trim_end_matches('/')
                 .to_string();
-            format!("{}/main/README.md", url)
+            format!("{}/{}/README.md", url, branch)
         } else {
             url.to_string()
         }
     }
 
-    /// Fetch URL content
-    fn fetch_url(url: &str) -> Result<String> {
+    /// Normalize repo string to owner/repo format
+    /// Accepts: "owner/repo", "https://github.com/owner/repo", "github.com/owner/repo"
+    fn normalize_repo(repo: &str) -> String {
+        let repo = repo.trim_end_matches('/');
+
+        // Already in owner/repo format
+        if !repo.contains("://") && !repo.contains("github.com") {
+            return repo.to_string();
+        }
+
+        // Extract owner/repo from URL
+        // https://github.com/owner/repo -> owner/repo
+        if let Some(pos) = repo.find("github.com/") {
+            let after = &repo[pos + 11..]; // skip "github.com/"
+            return after.to_string();
+        }
+
+        repo.to_string()
+    }
+
+    /// Fetch URL content, returns None for 404
+    fn fetch_url(url: &str) -> Result<Option<String>> {
         let output = Command::new("curl")
-            .args(["-sL", url])
+            .args(["-sL", "-w", "%{http_code}", "-o", "-", url])
             .output()
             .map_err(DotAgentError::Io)?;
 
-        if !output.status.success() {
-            return Err(DotAgentError::GitHubApiError {
-                message: format!("Failed to fetch: {}", url),
-            });
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Extract HTTP status code (last 3 chars)
+        if stdout.len() >= 3 {
+            let (content, status) = stdout.split_at(stdout.len() - 3);
+            if status == "404" {
+                return Ok(None);
+            }
+            if status.starts_with('2') {
+                return Ok(Some(content.to_string()));
+            }
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        // Fallback: check if output looks like an error
+        if !output.status.success() || stdout.contains("404") {
+            return Ok(None);
+        }
+
+        Ok(Some(stdout.to_string()))
     }
 
     /// Check if gh CLI is available
@@ -550,8 +598,20 @@ impl ChannelManager {
             }
             _ => {
                 if let Some(url) = channel.source.url() {
-                    let raw_url = Self::to_raw_url(url);
-                    let content = Self::fetch_url(&raw_url)?;
+                    // Try main first, then master
+                    let content =
+                        if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "main"))? {
+                            c
+                        } else if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "master"))? {
+                            c
+                        } else {
+                            return Err(DotAgentError::GitHubApiError {
+                                message: format!(
+                                    "Failed to fetch README from: {} (tried main and master)",
+                                    url
+                                ),
+                            });
+                        };
 
                     let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
                     std::fs::create_dir_all(&cache_dir)?;
@@ -568,13 +628,28 @@ impl ChannelManager {
     /// Downloads `.claude-plugin/marketplace.json` from the repository
     /// and caches it locally.
     fn fetch_marketplace_catalog(&self, repo: &str, channel_name: &str) -> Result<()> {
-        // Build raw URL: https://raw.githubusercontent.com/{owner}/{repo}/main/.claude-plugin/marketplace.json
-        let raw_url = format!(
+        // Normalize repo: extract owner/repo from full URL if needed
+        let repo = Self::normalize_repo(repo);
+
+        // Try main first, then master
+        let content = if let Some(c) = Self::fetch_url(&format!(
             "https://raw.githubusercontent.com/{}/main/.claude-plugin/marketplace.json",
             repo
-        );
-
-        let content = Self::fetch_url(&raw_url)?;
+        ))? {
+            c
+        } else if let Some(c) = Self::fetch_url(&format!(
+            "https://raw.githubusercontent.com/{}/master/.claude-plugin/marketplace.json",
+            repo
+        ))? {
+            c
+        } else {
+            return Err(DotAgentError::GitHubApiError {
+                message: format!(
+                    "Failed to fetch marketplace.json from: {} (tried main and master)",
+                    repo
+                ),
+            });
+        };
 
         // Validate JSON structure
         let data: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
@@ -763,8 +838,12 @@ mod tests {
     #[test]
     fn to_raw_url_github() {
         let url = "https://github.com/webpro/awesome-dotfiles";
-        let raw = ChannelManager::to_raw_url(url);
+        let raw = ChannelManager::to_raw_url(url, "main");
         assert!(raw.contains("raw.githubusercontent.com"));
         assert!(raw.contains("README.md"));
+        assert!(raw.contains("/main/"));
+
+        let raw_master = ChannelManager::to_raw_url(url, "master");
+        assert!(raw_master.contains("/master/"));
     }
 }

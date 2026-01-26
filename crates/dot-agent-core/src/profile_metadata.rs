@@ -17,10 +17,11 @@ const PROFILES_INDEX_FILE: &str = "profiles.toml";
 const PROFILE_METADATA_FILE: &str = ".dot-agent.toml";
 
 /// Profile source specification
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ProfileSource {
     /// Locally created profile
+    #[default]
     Local,
 
     /// Imported from Git repository
@@ -40,12 +41,6 @@ pub enum ProfileSource {
         plugin: String,
         version: String,
     },
-}
-
-impl Default for ProfileSource {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 /// Profile entry in profiles.toml

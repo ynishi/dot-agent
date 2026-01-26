@@ -67,13 +67,12 @@ impl PluginRegistrar {
 
         let hooks_dir = profile_path.join(PLUGIN_HOOKS_DIR);
         if hooks_dir.exists() && hooks_dir.is_dir() {
-            // Check for hooks.json or hook files
-            if hooks_dir.join("hooks.json").exists() {
-                features.push("hooks".to_string());
-            } else if fs::read_dir(&hooks_dir)
-                .map(|mut d| d.next().is_some())
-                .unwrap_or(false)
-            {
+            // Check for hooks.json or any hook files
+            let has_hooks = hooks_dir.join("hooks.json").exists()
+                || fs::read_dir(&hooks_dir)
+                    .map(|mut d| d.next().is_some())
+                    .unwrap_or(false);
+            if has_hooks {
                 features.push("hooks".to_string());
             }
         }

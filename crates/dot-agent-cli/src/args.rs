@@ -710,8 +710,11 @@ pub enum ChannelAction {
         name: Option<String>,
     },
 
-    /// List enabled channels
-    List,
+    /// List enabled channels, or list importable profiles from a specific channel
+    List {
+        /// Channel name to list profiles from (optional)
+        name: Option<String>,
+    },
 
     /// Remove/disable a channel
     Remove {
