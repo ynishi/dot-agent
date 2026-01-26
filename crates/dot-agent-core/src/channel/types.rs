@@ -82,6 +82,8 @@ pub enum ChannelType {
     Hub,
     /// Direct URL (GitHub repo, etc.)
     Direct,
+    /// Claude Code Plugin Marketplace
+    ClaudePlugin,
 }
 
 impl ChannelType {
@@ -91,12 +93,16 @@ impl ChannelType {
             Self::AwesomeList => "awesome",
             Self::Hub => "hub",
             Self::Direct => "direct",
+            Self::ClaudePlugin => "claude-plugin",
         }
     }
 
     /// Whether this channel type supports search
     pub fn is_searchable(&self) -> bool {
-        matches!(self, Self::GitHubGlobal | Self::AwesomeList)
+        matches!(
+            self,
+            Self::GitHubGlobal | Self::AwesomeList | Self::ClaudePlugin
+        )
     }
 }
 
@@ -131,6 +137,33 @@ pub enum ChannelSource {
         /// When it was imported
         imported_at: String,
     },
+    /// Claude Code Plugin Marketplace
+    ClaudePlugin {
+        /// Marketplace name (e.g., "claude-plugins-official")
+        marketplace_name: String,
+        /// Source type and location
+        source: ClaudePluginSource,
+    },
+}
+
+/// Source specification for Claude Plugin Marketplace
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+pub enum ClaudePluginSource {
+    /// GitHub repository (e.g., "anthropics/claude-plugins-official")
+    Github {
+        repo: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+    },
+    /// Git URL
+    Url {
+        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+    },
+    /// Local path
+    Local { path: String },
 }
 
 impl ChannelSource {
@@ -167,6 +200,47 @@ impl ChannelSource {
             Self::Hub { .. } => None,
             Self::Url { url } => Some(url),
             Self::Anonymous { url, .. } => Some(url),
+            Self::ClaudePlugin { source, .. } => match source {
+                ClaudePluginSource::Github { .. } => None, // Use repo format instead
+                ClaudePluginSource::Url { url, .. } => Some(url),
+                ClaudePluginSource::Local { path } => Some(path),
+            },
+        }
+    }
+
+    /// Create a Claude Plugin Marketplace source from GitHub
+    pub fn claude_plugin_github(
+        marketplace_name: impl Into<String>,
+        repo: impl Into<String>,
+    ) -> Self {
+        Self::ClaudePlugin {
+            marketplace_name: marketplace_name.into(),
+            source: ClaudePluginSource::Github {
+                repo: repo.into(),
+                r#ref: None,
+            },
+        }
+    }
+
+    /// Create a Claude Plugin Marketplace source from URL
+    pub fn claude_plugin_url(marketplace_name: impl Into<String>, url: impl Into<String>) -> Self {
+        Self::ClaudePlugin {
+            marketplace_name: marketplace_name.into(),
+            source: ClaudePluginSource::Url {
+                url: url.into(),
+                r#ref: None,
+            },
+        }
+    }
+
+    /// Create a Claude Plugin Marketplace source from local path
+    pub fn claude_plugin_local(
+        marketplace_name: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        Self::ClaudePlugin {
+            marketplace_name: marketplace_name.into(),
+            source: ClaudePluginSource::Local { path: path.into() },
         }
     }
 }
@@ -270,6 +344,48 @@ impl Channel {
             channel_type: ChannelType::Direct,
             source: ChannelSource::anonymous(url_str),
             description: None,
+            added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            enabled: true,
+            builtin: false,
+        }
+    }
+
+    /// Create a Claude Plugin Marketplace channel from GitHub
+    pub fn claude_plugin_github(name: impl Into<String>, repo: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
+            name: name.clone(),
+            channel_type: ChannelType::ClaudePlugin,
+            source: ChannelSource::claude_plugin_github(&name, repo),
+            description: Some("Claude Code Plugin Marketplace".to_string()),
+            added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            enabled: true,
+            builtin: false,
+        }
+    }
+
+    /// Create a Claude Plugin Marketplace channel from URL
+    pub fn claude_plugin_url(name: impl Into<String>, url: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
+            name: name.clone(),
+            channel_type: ChannelType::ClaudePlugin,
+            source: ChannelSource::claude_plugin_url(&name, url),
+            description: Some("Claude Code Plugin Marketplace".to_string()),
+            added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            enabled: true,
+            builtin: false,
+        }
+    }
+
+    /// Create a Claude Plugin Marketplace channel from local path
+    pub fn claude_plugin_local(name: impl Into<String>, path: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
+            name: name.clone(),
+            channel_type: ChannelType::ClaudePlugin,
+            source: ChannelSource::claude_plugin_local(&name, path),
+            description: Some("Claude Code Plugin Marketplace (local)".to_string()),
             added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             enabled: true,
             builtin: false,

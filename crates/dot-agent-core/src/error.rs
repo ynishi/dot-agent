@@ -95,6 +95,18 @@ pub enum DotAgentError {
 
     #[error("Cannot remove built-in channel: {name}")]
     CannotRemoveBuiltinChannel { name: String },
+
+    #[error("File not found: {path}")]
+    FileNotFound { path: PathBuf },
+
+    #[error("Plugin not found: {name}")]
+    PluginNotFound { name: String },
+
+    #[error("Marketplace not found: {name}")]
+    MarketplaceNotFound { name: String },
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;

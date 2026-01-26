@@ -101,6 +101,12 @@ pub enum Commands {
         action: ChannelAction,
     },
 
+    /// Manage Claude Code plugins
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -461,6 +467,45 @@ pub enum ProfileAction {
         #[command(subcommand)]
         action: ProfileSnapshotAction,
     },
+
+    /// Publish profile as Claude Code plugin
+    Publish {
+        /// Profile name
+        name: String,
+
+        /// Version (default: 1.0.0 or bump from current)
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Version bump type (patch, minor, major) - overrides --version
+        #[arg(long)]
+        bump: Option<String>,
+
+        /// Install scope (user, project, local)
+        #[arg(short, long, default_value = "user")]
+        scope: String,
+
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Author name
+        #[arg(long)]
+        author: Option<String>,
+    },
+
+    /// Unpublish profile (remove from plugin cache)
+    Unpublish {
+        /// Profile name
+        name: String,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// List published profiles
+    Published,
 }
 
 #[derive(Subcommand)]
@@ -716,6 +761,101 @@ pub enum ChannelAction {
     /// Refresh channel cache
     Refresh {
         /// Channel name (refresh all if not specified)
+        name: Option<String>,
+    },
+
+    /// Add a Claude Code Plugin Marketplace as channel
+    AddPlugin {
+        /// Marketplace URL (GitHub repo like "anthropics/claude-plugins-official")
+        url: String,
+
+        /// Custom name for the marketplace/channel
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PluginAction {
+    /// Search plugins across all marketplaces
+    Search {
+        /// Search query
+        query: String,
+
+        /// Maximum results to show
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
+
+    /// List plugins from a marketplace
+    List {
+        /// Marketplace name
+        marketplace: String,
+    },
+
+    /// List all installed plugins
+    Installed,
+
+    /// Show plugin information
+    Info {
+        /// Plugin name
+        name: String,
+
+        /// Marketplace name
+        #[arg(short, long)]
+        marketplace: String,
+    },
+
+    /// Install a plugin
+    Install {
+        /// Plugin name
+        name: String,
+
+        /// Marketplace name
+        #[arg(short, long)]
+        marketplace: String,
+
+        /// Install scope (user, project, local)
+        #[arg(short, long, default_value = "user")]
+        scope: String,
+    },
+
+    /// Uninstall a plugin
+    Uninstall {
+        /// Plugin name
+        name: String,
+
+        /// Marketplace name
+        #[arg(short, long)]
+        marketplace: String,
+    },
+
+    /// Add a marketplace
+    AddMarketplace {
+        /// Marketplace URL (GitHub repo) or local path
+        source: String,
+
+        /// Custom name for the marketplace
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Source is a local path
+        #[arg(long)]
+        local: bool,
+    },
+
+    /// Remove a marketplace
+    RemoveMarketplace {
+        /// Marketplace name
+        name: String,
+    },
+
+    /// List all marketplaces
+    ListMarketplaces,
+
+    /// Update a marketplace
+    UpdateMarketplace {
+        /// Marketplace name (update all if not specified)
         name: Option<String>,
     },
 }

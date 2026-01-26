@@ -89,6 +89,11 @@ impl ChannelManager {
         match channel.channel_type {
             ChannelType::GitHubGlobal => self.search_github(channel, query, options),
             ChannelType::AwesomeList => self.search_awesome_list(channel, query, options),
+            ChannelType::ClaudePlugin => {
+                // Claude Plugin search is handled separately via plugin module
+                // TODO: Implement search_claude_plugin when Phase 2 is complete
+                Ok(Vec::new())
+            }
             ChannelType::Hub | ChannelType::Direct => {
                 // Not searchable
                 Ok(Vec::new())
