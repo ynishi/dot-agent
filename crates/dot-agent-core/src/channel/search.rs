@@ -89,11 +89,6 @@ impl ChannelManager {
         match channel.channel_type {
             ChannelType::GitHubGlobal => self.search_github(channel, query, options),
             ChannelType::AwesomeList => self.search_awesome_list(channel, query, options),
-            ChannelType::ClaudePlugin => {
-                // Claude Plugin search is handled separately via plugin module
-                // TODO: Implement search_claude_plugin when Phase 2 is complete
-                Ok(Vec::new())
-            }
             ChannelType::Hub | ChannelType::Direct => {
                 // Not searchable
                 Ok(Vec::new())
@@ -167,9 +162,7 @@ impl ChannelManager {
         }
 
         let json: serde_json::Value =
-            serde_json::from_slice(&output.stdout).map_err(|e| DotAgentError::GitHubApiError {
-                message: format!("Invalid JSON response: {}", e),
-            })?;
+            serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Array(vec![]));
 
         let repos = json
             .as_array()

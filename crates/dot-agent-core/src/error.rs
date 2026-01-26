@@ -95,24 +95,6 @@ pub enum DotAgentError {
 
     #[error("Cannot remove built-in channel: {name}")]
     CannotRemoveBuiltinChannel { name: String },
-
-    #[error("File not found: {path}")]
-    FileNotFound { path: PathBuf },
-
-    #[error("Plugin not found: {name}")]
-    PluginNotFound { name: String },
-
-    #[error("Marketplace not found: {name}")]
-    MarketplaceNotFound { name: String },
-
-    #[error("Marketplace already exists: {name}")]
-    MarketplaceAlreadyExists { name: String },
-
-    #[error("Path traversal detected: {path}")]
-    PathTraversal { path: PathBuf },
-
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -142,8 +124,6 @@ impl DotAgentError {
             Self::ChannelAlreadyExists { .. } => 21,
             Self::ChannelNotFound { .. } => 22,
             Self::CannotRemoveBuiltinChannel { .. } => 23,
-            Self::MarketplaceAlreadyExists { .. } => 24,
-            Self::PathTraversal { .. } => 25,
             _ => 1,
         }
     }
