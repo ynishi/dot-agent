@@ -341,7 +341,9 @@ impl ProfilePublisher {
             }
         };
 
-        fs::create_dir_all(target_claude_md.parent().unwrap())?;
+        if let Some(parent) = target_claude_md.parent() {
+            fs::create_dir_all(parent)?;
+        }
 
         let source_content = fs::read_to_string(&claude_md)?;
 
@@ -437,11 +439,7 @@ impl ProfilePublisher {
     }
 }
 
-impl Default for ProfilePublisher {
-    fn default() -> Self {
-        Self::new().expect("Failed to create ProfilePublisher")
-    }
-}
+// Note: Default impl removed - use ProfilePublisher::new() which returns Result
 
 /// Version bump type
 #[derive(Debug, Clone, Copy)]

@@ -136,6 +136,15 @@ impl PluginFetcher {
                     return Err(DotAgentError::FileNotFound { path: source_dir });
                 }
 
+                // Validate path doesn't escape marketplace directory (path traversal protection)
+                let canonical_source = source_dir.canonicalize()?;
+                let canonical_marketplace = marketplace_dir.canonicalize()?;
+                if !canonical_source.starts_with(&canonical_marketplace) {
+                    return Err(DotAgentError::PathTraversal {
+                        path: source_dir,
+                    });
+                }
+
                 // Copy plugin directory
                 self.copy_dir_recursive(&source_dir, &target_dir)?;
             }

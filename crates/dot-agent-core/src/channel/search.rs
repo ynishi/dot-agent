@@ -167,7 +167,9 @@ impl ChannelManager {
         }
 
         let json: serde_json::Value =
-            serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Array(vec![]));
+            serde_json::from_slice(&output.stdout).map_err(|e| DotAgentError::GitHubApiError {
+                message: format!("Invalid JSON response: {}", e),
+            })?;
 
         let repos = json
             .as_array()

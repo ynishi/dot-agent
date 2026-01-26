@@ -313,11 +313,7 @@ impl PluginInstaller {
     }
 }
 
-impl Default for PluginInstaller {
-    fn default() -> Self {
-        Self::new().expect("Failed to create PluginInstaller")
-    }
-}
+// Note: Default impl removed - use PluginInstaller::new() which returns Result
 
 #[cfg(test)]
 mod tests {

@@ -89,7 +89,7 @@ impl PluginRegistry {
         let mut marketplaces = self.load_known_marketplaces()?;
 
         if marketplaces.contains_key(name) {
-            return Err(DotAgentError::ProfileAlreadyExists {
+            return Err(DotAgentError::MarketplaceAlreadyExists {
                 name: name.to_string(),
             });
         }
@@ -117,7 +117,7 @@ impl PluginRegistry {
         let mut marketplaces = self.load_known_marketplaces()?;
 
         if marketplaces.contains_key(name) {
-            return Err(DotAgentError::ProfileAlreadyExists {
+            return Err(DotAgentError::MarketplaceAlreadyExists {
                 name: name.to_string(),
             });
         }
@@ -145,7 +145,7 @@ impl PluginRegistry {
         let mut marketplaces = self.load_known_marketplaces()?;
 
         if marketplaces.contains_key(name) {
-            return Err(DotAgentError::ProfileAlreadyExists {
+            return Err(DotAgentError::MarketplaceAlreadyExists {
                 name: name.to_string(),
             });
         }
@@ -326,11 +326,7 @@ impl PluginRegistry {
     }
 }
 
-impl Default for PluginRegistry {
-    fn default() -> Self {
-        Self::new().expect("Failed to create PluginRegistry")
-    }
-}
+// Note: Default impl removed - use PluginRegistry::new() which returns Result
 
 #[cfg(test)]
 mod tests {
