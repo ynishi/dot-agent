@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod installer;
 pub mod metadata;
+pub mod plugin_registrar;
 pub mod profile;
 pub mod profile_metadata;
 pub mod rule;
@@ -17,6 +18,7 @@ pub use error::{DotAgentError, Result};
 pub use installer::{DiffResult, FileInfo, FileStatus, InstallResult, Installer};
 pub use metadata::Metadata;
 pub use profile::{IgnoreConfig, Profile, ProfileManager, DEFAULT_EXCLUDED_DIRS};
+pub use plugin_registrar::{PluginRegistrar, PluginRegistrationResult};
 pub use profile_metadata::{
     migrate_existing_profiles, PluginConfig, PluginScope, ProfileIndexEntry, ProfileInfo,
     ProfileMetadata, ProfileSource, ProfilesIndex,

@@ -902,6 +902,67 @@ fn handle_install(
         return Err(DotAgentError::Conflict { path: target_dir });
     }
 
+    // Auto-register plugin if profile has plugin features
+    if !dry_run {
+        use dot_agent_core::{PluginRegistrar, PluginScope};
+
+        let features = PluginRegistrar::get_plugin_features(&profile.path);
+        if !features.is_empty() {
+            println!();
+            println!(
+                "{} {}",
+                "Plugin features detected:".cyan(),
+                features.join(", ")
+            );
+
+            // Determine scope based on global flag
+            let scope = if global {
+                PluginScope::User
+            } else {
+                PluginScope::Project
+            };
+
+            match PluginRegistrar::new() {
+                Ok(registrar) => {
+                    match registrar.register_plugin(
+                        &profile.path,
+                        profile_name,
+                        scope,
+                        target.map(|p| p.parent().unwrap_or(p)),
+                    ) {
+                        Ok(reg_result) => {
+                            if reg_result.registered {
+                                println!(
+                                    "{} Plugin registered to {}",
+                                    "[OK]".green(),
+                                    reg_result
+                                        .settings_path
+                                        .as_ref()
+                                        .map(|p| p.display().to_string())
+                                        .unwrap_or_default()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "{} Failed to register plugin: {}",
+                                "[WARN]".yellow().bold(),
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{} Failed to initialize plugin registrar: {}",
+                        "[WARN]".yellow().bold(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     println!();
     println!(
         "{} {}",
@@ -1066,6 +1127,42 @@ fn handle_remove(
         &ignore_config,
         Some(&on_file),
     )?;
+
+    // Unregister plugin if profile had plugin features
+    if !dry_run {
+        use dot_agent_core::{PluginRegistrar, PluginScope};
+
+        let features = PluginRegistrar::get_plugin_features(&profile.path);
+        if !features.is_empty() {
+            let scope = if global {
+                PluginScope::User
+            } else {
+                PluginScope::Project
+            };
+
+            if let Ok(registrar) = PluginRegistrar::new() {
+                match registrar.unregister_plugin(
+                    &profile.path,
+                    scope,
+                    target.map(|p| p.parent().unwrap_or(p)),
+                ) {
+                    Ok(true) => {
+                        println!("{} Plugin unregistered", "[OK]".green());
+                    }
+                    Ok(false) => {
+                        // Plugin wasn't registered
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} Failed to unregister plugin: {}",
+                            "[WARN]".yellow().bold(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     println!();
     println!("Summary:");
