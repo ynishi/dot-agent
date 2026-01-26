@@ -1350,8 +1350,17 @@ fn import_from_git(
         parts.join("_")
     });
 
-    // Import
-    let profile = manager.import_profile(&import_path, &profile_name, force)?;
+    // Import with git source info
+    let subpath_str = subpath.as_ref().map(|p| p.to_string_lossy().to_string());
+    let profile = manager.import_profile_from_git(
+        &import_path,
+        &profile_name,
+        force,
+        url,
+        branch.as_deref(),
+        None, // commit (could get from git rev-parse HEAD)
+        subpath_str.as_deref(),
+    )?;
 
     // Cleanup temp directory
     let _ = std::fs::remove_dir_all(&temp_dir);

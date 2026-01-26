@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::error::{DotAgentError, Result};
+use crate::profile_metadata::{ProfileIndexEntry, ProfileMetadata, ProfileSource, ProfilesIndex};
 
 const PROFILES_DIR: &str = "profiles";
 const IGNORED_FILES: &[&str] = &[".DS_Store", ".gitignore", ".gitkeep"];
@@ -263,6 +264,15 @@ dot-agent install {}
         );
         fs::write(path.join("CLAUDE.md"), claude_md)?;
 
+        // Create profile metadata
+        let metadata = ProfileMetadata::new_local(name);
+        metadata.save(&path)?;
+
+        // Update profiles index
+        let mut index = ProfilesIndex::load(&self.base_dir)?;
+        index.upsert(name, ProfileIndexEntry::new_local(name));
+        index.save(&self.base_dir)?;
+
         Ok(Profile::new(name.to_string(), path))
     }
 
@@ -270,6 +280,12 @@ dot-agent install {}
     pub fn remove_profile(&self, name: &str) -> Result<()> {
         let profile = self.get_profile(name)?;
         fs::remove_dir_all(&profile.path)?;
+
+        // Update profiles index
+        let mut index = ProfilesIndex::load(&self.base_dir)?;
+        index.remove(name);
+        index.save(&self.base_dir)?;
+
         Ok(())
     }
 
@@ -291,11 +307,74 @@ dot-agent install {}
 
         copy_dir_recursive(&source.path, &dest_path)?;
 
+        // Update metadata with new name
+        if let Some(mut metadata) = ProfileMetadata::load(&dest_path)? {
+            metadata.profile.name = dest_name.to_string();
+            metadata.save(&dest_path)?;
+        } else {
+            let metadata = ProfileMetadata::new_local(dest_name);
+            metadata.save(&dest_path)?;
+        }
+
+        // Update profiles index
+        let mut index = ProfilesIndex::load(&self.base_dir)?;
+        index.upsert(dest_name, ProfileIndexEntry::new_local(dest_name));
+        index.save(&self.base_dir)?;
+
         Ok(Profile::new(dest_name.to_string(), dest_path))
     }
 
-    /// Import a directory as a profile
+    /// Import a directory as a profile (local source)
     pub fn import_profile(&self, source: &Path, name: &str, force: bool) -> Result<Profile> {
+        self.import_profile_with_source(source, name, force, ProfileSource::Local)
+    }
+
+    /// Import a directory as a profile from git
+    pub fn import_profile_from_git(
+        &self,
+        source: &Path,
+        name: &str,
+        force: bool,
+        url: &str,
+        branch: Option<&str>,
+        commit: Option<&str>,
+        subpath: Option<&str>,
+    ) -> Result<Profile> {
+        let source_info = ProfileSource::Git {
+            url: url.to_string(),
+            branch: branch.map(|s| s.to_string()),
+            commit: commit.map(|s| s.to_string()),
+            path: subpath.map(|s| s.to_string()),
+        };
+        self.import_profile_with_source(source, name, force, source_info)
+    }
+
+    /// Import a directory as a profile from marketplace
+    pub fn import_profile_from_marketplace(
+        &self,
+        source: &Path,
+        name: &str,
+        force: bool,
+        channel: &str,
+        plugin: &str,
+        version: &str,
+    ) -> Result<Profile> {
+        let source_info = ProfileSource::Marketplace {
+            channel: channel.to_string(),
+            plugin: plugin.to_string(),
+            version: version.to_string(),
+        };
+        self.import_profile_with_source(source, name, force, source_info)
+    }
+
+    /// Import a directory as a profile with source information
+    fn import_profile_with_source(
+        &self,
+        source: &Path,
+        name: &str,
+        force: bool,
+        source_info: ProfileSource,
+    ) -> Result<Profile> {
         validate_profile_name(name)?;
 
         if !source.exists() {
@@ -321,7 +400,67 @@ dot-agent install {}
         // Copy directory recursively
         copy_dir_recursive(source, &dest)?;
 
+        // Create or update profile metadata
+        let metadata = match &source_info {
+            ProfileSource::Local => ProfileMetadata::new_local(name),
+            ProfileSource::Git {
+                url,
+                branch,
+                commit,
+                path,
+            } => ProfileMetadata::new_git(
+                name,
+                url,
+                branch.as_deref(),
+                commit.as_deref(),
+                path.as_deref(),
+            ),
+            ProfileSource::Marketplace {
+                channel,
+                plugin,
+                version,
+            } => ProfileMetadata::new_marketplace(name, channel, plugin, version),
+        };
+        metadata.save(&dest)?;
+
+        // Update profiles index
+        let mut index = ProfilesIndex::load(&self.base_dir)?;
+        let entry = match &source_info {
+            ProfileSource::Local => ProfileIndexEntry::new_local(name),
+            ProfileSource::Git {
+                url,
+                branch,
+                commit,
+                path,
+            } => ProfileIndexEntry::new_git(
+                name,
+                url,
+                branch.as_deref(),
+                commit.as_deref(),
+                path.as_deref(),
+            ),
+            ProfileSource::Marketplace {
+                channel,
+                plugin,
+                version,
+            } => ProfileIndexEntry::new_marketplace(name, channel, plugin, version),
+        };
+        index.upsert(name, entry);
+        index.save(&self.base_dir)?;
+
         Ok(Profile::new(name.to_string(), dest))
+    }
+
+    /// Get metadata for a profile
+    pub fn get_profile_metadata(&self, name: &str) -> Result<Option<ProfileMetadata>> {
+        let profile = self.get_profile(name)?;
+        ProfileMetadata::load(&profile.path)
+    }
+
+    /// Get profile source from index
+    pub fn get_profile_source(&self, name: &str) -> Result<Option<ProfileSource>> {
+        let index = ProfilesIndex::load(&self.base_dir)?;
+        Ok(index.get(name).map(|e| e.source.clone()))
     }
 }
 
