@@ -16,6 +16,12 @@ const PREFIXED_DIRS: &[&str] = &["agents", "commands", "rules"];
 // Directories where subdirectories should be prefixed (skills has SKILL.md inside)
 const PREFIXED_SUBDIRS: &[&str] = &["skills"];
 
+/// Generate metadata key with profile prefix.
+/// Format: "{profile}:{relative_path}"
+fn make_meta_key(profile_name: &str, relative_path: &str) -> String {
+    format!("{}:{}", profile_name, relative_path)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FileStatus {
     Unchanged,
@@ -146,7 +152,8 @@ impl Installer {
                     fs::create_dir_all(parent)?;
                 }
                 fs::write(&dst, &src_content)?;
-                metadata.add_file(&relative_str, &src_hash);
+                let meta_key = make_meta_key(&profile.name, &relative_str);
+                metadata.add_file(&meta_key, &src_hash);
             }
 
             if let Some(f) = on_file {
@@ -314,7 +321,8 @@ impl Installer {
             // Remove file
             if !dry_run && dst.exists() {
                 fs::remove_file(&dst)?;
-                metadata.remove_file(&relative_str);
+                let meta_key = make_meta_key(&profile.name, &relative_str);
+                metadata.remove_file(&meta_key);
 
                 // Remove empty parent directories
                 if let Some(parent) = dst.parent() {
@@ -391,6 +399,8 @@ impl Installer {
             let src_content = fs::read(&src)?;
             let src_hash = compute_hash(&src_content);
 
+            let meta_key = make_meta_key(&profile.name, &relative_str);
+
             if !dst.exists() {
                 // New file
                 if !dry_run {
@@ -398,7 +408,7 @@ impl Installer {
                         fs::create_dir_all(parent)?;
                     }
                     fs::write(&dst, &src_content)?;
-                    metadata.add_file(&relative_str, &src_hash);
+                    metadata.add_file(&meta_key, &src_hash);
                 }
                 if let Some(f) = on_file {
                     f("NEW", &relative_str);
@@ -427,7 +437,7 @@ impl Installer {
             }
 
             // Check if file was modified locally
-            let original_hash = metadata.get_file_hash(&relative_str);
+            let original_hash = metadata.get_file_hash(&meta_key);
             let locally_modified = original_hash.map(|h| h != &dst_hash).unwrap_or(false);
 
             if locally_modified && !force {
@@ -441,7 +451,7 @@ impl Installer {
             // Update file
             if !dry_run {
                 fs::write(&dst, &src_content)?;
-                metadata.add_file(&relative_str, &src_hash);
+                metadata.add_file(&meta_key, &src_hash);
             }
             if let Some(f) = on_file {
                 f("UPDATE", &relative_str);

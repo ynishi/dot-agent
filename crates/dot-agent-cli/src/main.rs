@@ -1564,13 +1564,8 @@ fn handle_status(base_dir: &Path, target: Option<&Path>, global: bool) -> Result
         Some(meta) => {
             println!("Installed profiles:");
             for profile in &meta.installed.profiles {
-                let file_count = meta
-                    .files
-                    .keys()
-                    .filter(|f| {
-                        f.starts_with(&format!("{}:", profile)) || meta.files.contains_key(*f)
-                    })
-                    .count();
+                let prefix = format!("{}:", profile);
+                let file_count = meta.files.keys().filter(|f| f.starts_with(&prefix)).count();
                 println!("  {} ({} files)", profile.cyan(), file_count);
             }
             println!();
