@@ -11,7 +11,24 @@ const IGNORED_FILES: &[&str] = &[".DS_Store", ".gitignore", ".gitkeep"];
 const IGNORED_EXTENSIONS: &[&str] = &[];
 
 /// Default directories to exclude from profile operations
-pub const DEFAULT_EXCLUDED_DIRS: &[&str] = &[".git"];
+pub const DEFAULT_EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    // Test directories
+    "tests",
+    "test",
+    "__tests__",
+    // Build/cache directories
+    "__pycache__",
+    ".pytest_cache",
+    "node_modules",
+    "target",
+    // IDE/editor directories
+    ".vscode",
+    ".idea",
+    // CI/CD directories
+    ".github",
+    ".gitlab",
+];
 
 /// Configuration for file ignore/include behavior
 #[derive(Debug, Clone, Default)]
@@ -528,6 +545,32 @@ mod tests {
     fn ignore_config_default_excludes_git() {
         let config = IgnoreConfig::with_defaults();
         assert!(config.excluded_dirs.contains(&".git".to_string()));
+    }
+
+    #[test]
+    fn ignore_config_default_excludes_tests() {
+        let config = IgnoreConfig::with_defaults();
+        assert!(config.excluded_dirs.contains(&"tests".to_string()));
+        assert!(config.excluded_dirs.contains(&"test".to_string()));
+        assert!(config.excluded_dirs.contains(&"__tests__".to_string()));
+    }
+
+    #[test]
+    fn ignore_config_default_excludes_build_dirs() {
+        let config = IgnoreConfig::with_defaults();
+        assert!(config.excluded_dirs.contains(&"__pycache__".to_string()));
+        assert!(config.excluded_dirs.contains(&".pytest_cache".to_string()));
+        assert!(config.excluded_dirs.contains(&"node_modules".to_string()));
+        assert!(config.excluded_dirs.contains(&"target".to_string()));
+    }
+
+    #[test]
+    fn ignore_config_should_ignore_tests_dir() {
+        let config = IgnoreConfig::with_defaults();
+
+        assert!(config.should_ignore(Path::new("tests")));
+        assert!(config.should_ignore(Path::new("tests/unit/test_parser.py")));
+        assert!(config.should_ignore(Path::new("tests/claude-code/analyze-token-usage.py")));
     }
 
     #[test]
