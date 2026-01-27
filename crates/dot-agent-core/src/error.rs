@@ -98,6 +98,9 @@ pub enum DotAgentError {
 
     #[error("JSON parse error: {message}")]
     JsonParseError { message: String },
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;

@@ -1,9 +1,11 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
 use crate::error::{DotAgentError, Result};
+use crate::plugin_manifest::{FilterConfig, PluginManifest, DEFAULT_COMPONENT_DIRS};
 use crate::profile_metadata::{ProfileIndexEntry, ProfileMetadata, ProfileSource, ProfilesIndex};
 
 const PROFILES_DIR: &str = "profiles";
@@ -126,22 +128,121 @@ impl Profile {
     }
 
     /// List all files in the profile directory (relative paths) with custom ignore config
+    ///
+    /// File collection logic:
+    /// 1. Base collection:
+    ///    - plugin.json exists → scan component paths (commands, agents, etc.)
+    ///    - plugin.json absent → scan default directories
+    /// 2. Apply filter (.dot-agent.toml):
+    ///    - include → add matching files to base
+    ///    - exclude → remove matching files
+    /// 3. Apply DEFAULT_EXCLUDED_DIRS always
     pub fn list_files_with_config(&self, config: &IgnoreConfig) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
+        // Load plugin manifest and filter config
+        let manifest = PluginManifest::load(&self.path)?;
+        let filter = FilterConfig::load(&self.path)?;
 
-        for entry in WalkDir::new(&self.path).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_file() {
-                if let Ok(relative) = path.strip_prefix(&self.path) {
-                    if !config.should_ignore(relative) {
-                        files.push(relative.to_path_buf());
+        // 1. Collect base files
+        let mut files: HashSet<PathBuf> = HashSet::new();
+
+        // Determine base directories to scan
+        let base_dirs: Vec<PathBuf> = if let Some(ref m) = manifest {
+            if m.has_explicit_paths() {
+                // Use explicit paths from plugin.json
+                m.get_component_paths()
+            } else {
+                // Use default component directories
+                DEFAULT_COMPONENT_DIRS.iter().map(PathBuf::from).collect()
+            }
+        } else {
+            // No plugin.json: use default directories
+            DEFAULT_COMPONENT_DIRS.iter().map(PathBuf::from).collect()
+        };
+
+        // Scan base directories
+        for base_dir in &base_dirs {
+            let full_path = self.path.join(base_dir);
+            if full_path.exists() {
+                self.collect_files_from_dir(&full_path, config, &mut files)?;
+            }
+        }
+
+        // Also include root-level files (CLAUDE.md, etc.)
+        if let Ok(entries) = fs::read_dir(&self.path) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Ok(relative) = path.strip_prefix(&self.path) {
+                        if !config.should_ignore(relative) {
+                            files.insert(relative.to_path_buf());
+                        }
                     }
                 }
             }
         }
 
-        files.sort();
-        Ok(files)
+        // 2. Apply filter config
+        if let Some(ref f) = filter {
+            // Add files matching include patterns
+            if !f.include.is_empty() {
+                self.add_matching_files(&f.include, config, &mut files)?;
+            }
+
+            // Remove files matching exclude patterns
+            if !f.exclude.is_empty() {
+                files.retain(|path| !f.matches_exclude(path));
+            }
+        }
+
+        // Convert to sorted Vec
+        let mut result: Vec<PathBuf> = files.into_iter().collect();
+        result.sort();
+        Ok(result)
+    }
+
+    /// Collect files from a directory into the set
+    fn collect_files_from_dir(
+        &self,
+        dir: &Path,
+        config: &IgnoreConfig,
+        files: &mut HashSet<PathBuf>,
+    ) -> Result<()> {
+        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(relative) = path.strip_prefix(&self.path) {
+                    if !config.should_ignore(relative) {
+                        files.insert(relative.to_path_buf());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Add files matching glob patterns
+    fn add_matching_files(
+        &self,
+        patterns: &[String],
+        config: &IgnoreConfig,
+        files: &mut HashSet<PathBuf>,
+    ) -> Result<()> {
+        for pattern in patterns {
+            // Use glob to find matching files
+            let full_pattern = self.path.join(pattern).to_string_lossy().to_string();
+            if let Ok(matches) = glob::glob(&full_pattern) {
+                for entry in matches.filter_map(|e| e.ok()) {
+                    if entry.is_file() {
+                        if let Ok(relative) = entry.strip_prefix(&self.path) {
+                            if !config.should_ignore(relative) {
+                                files.insert(relative.to_path_buf());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Get contents summary (e.g., "skills (5), commands (3)")
