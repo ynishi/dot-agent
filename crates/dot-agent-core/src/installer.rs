@@ -325,11 +325,15 @@ impl Installer {
         let diff = self.diff(profile, target, ignore_config)?;
 
         // Check for local modifications
+        // Skip mergeable JSON files - they are expected to differ due to profile markers
         if !force {
             let modified: Vec<_> = diff
                 .files
                 .iter()
-                .filter(|f| f.status == FileStatus::Modified)
+                .filter(|f| {
+                    f.status == FileStatus::Modified
+                        && (no_merge || !is_mergeable_json(&f.relative_path))
+                })
                 .map(|f| f.relative_path.clone())
                 .collect();
 
