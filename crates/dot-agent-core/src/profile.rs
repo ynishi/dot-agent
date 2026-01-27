@@ -1,11 +1,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use once_cell::unsync::OnceCell;
+
 use walkdir::WalkDir;
 
 use crate::error::{DotAgentError, Result};
 use crate::plugin_manifest::{FilterConfig, PluginManifest, DEFAULT_COMPONENT_DIRS};
-use crate::profile_metadata::{ProfileIndexEntry, ProfileMetadata, ProfileSource, ProfilesIndex};
+use crate::profile_metadata::{
+    PluginScope, ProfileIndexEntry, ProfileMetadata, ProfileSource, ProfilesIndex,
+};
 
 const PROFILES_DIR: &str = "profiles";
 const IGNORED_FILES: &[&str] = &[".DS_Store", ".gitignore", ".gitkeep"];
@@ -200,15 +204,98 @@ impl AllowedFilter {
     }
 }
 
+/// A profile containing configuration files for Claude Code
+///
+/// Profile aggregates related metadata with lazy loading:
+/// - `PluginManifest` from `.claude-plugin/plugin.json`
+/// - `ProfileMetadata` from `.dot-agent.toml`
+/// - `FilterConfig` from `.dot-agent.toml` filter section
 pub struct Profile {
     pub name: String,
     pub path: PathBuf,
+
+    // Lazy-loaded cached data
+    manifest: OnceCell<Option<PluginManifest>>,
+    metadata: OnceCell<Option<ProfileMetadata>>,
+    filter: OnceCell<Option<FilterConfig>>,
 }
 
 impl Profile {
     pub fn new(name: String, path: PathBuf) -> Self {
-        Self { name, path }
+        Self {
+            name,
+            path,
+            manifest: OnceCell::new(),
+            metadata: OnceCell::new(),
+            filter: OnceCell::new(),
+        }
     }
+
+    // =========================================================================
+    // Lazy-loaded accessors
+    // =========================================================================
+
+    /// Get plugin manifest (lazy loaded from `.claude-plugin/plugin.json`)
+    pub fn manifest(&self) -> Result<Option<&PluginManifest>> {
+        self.manifest
+            .get_or_try_init(|| PluginManifest::load(&self.path))
+            .map(|opt| opt.as_ref())
+    }
+
+    /// Get profile metadata (lazy loaded from `.dot-agent.toml`)
+    pub fn metadata(&self) -> Result<Option<&ProfileMetadata>> {
+        self.metadata
+            .get_or_try_init(|| ProfileMetadata::load(&self.path))
+            .map(|opt| opt.as_ref())
+    }
+
+    /// Get filter config (lazy loaded from `.dot-agent.toml`)
+    pub fn filter_config(&self) -> Result<Option<&FilterConfig>> {
+        self.filter
+            .get_or_try_init(|| FilterConfig::load(&self.path))
+            .map(|opt| opt.as_ref())
+    }
+
+    // =========================================================================
+    // Convenience methods
+    // =========================================================================
+
+    /// Get profile source (Local, Git, or Marketplace)
+    pub fn source(&self) -> Result<ProfileSource> {
+        Ok(self
+            .metadata()?
+            .map(|m| m.source.clone())
+            .unwrap_or_default())
+    }
+
+    /// Get profile version
+    pub fn version(&self) -> Result<Option<String>> {
+        Ok(self.metadata()?.and_then(|m| m.profile.version.clone()))
+    }
+
+    /// Get profile description
+    pub fn description(&self) -> Result<Option<String>> {
+        Ok(self.metadata()?.and_then(|m| m.profile.description.clone()))
+    }
+
+    /// Check if profile has plugin features (hooks, MCP, LSP)
+    pub fn has_plugin_features(&self) -> bool {
+        ProfileMetadata::has_plugin_features(&self.path)
+    }
+
+    /// Get plugin scope (User, Project, or Local)
+    pub fn plugin_scope(&self) -> Result<PluginScope> {
+        Ok(self.metadata()?.map(|m| m.plugin.scope).unwrap_or_default())
+    }
+
+    /// Check if plugin is enabled
+    pub fn plugin_enabled(&self) -> Result<bool> {
+        Ok(self.metadata()?.map(|m| m.plugin.enabled).unwrap_or(true))
+    }
+
+    // =========================================================================
+    // File listing
+    // =========================================================================
 
     /// List all files in the profile directory (relative paths) with default ignore config
     pub fn list_files(&self) -> Result<Vec<PathBuf>> {
@@ -221,12 +308,12 @@ impl Profile {
     /// 1. Build allowed filter: (DEFAULT_DIRS or plugin paths) + CLAUDE.md + include - exclude
     /// 2. Walk all files and collect only those matching the filter
     pub fn list_files_with_config(&self, config: &IgnoreConfig) -> Result<Vec<PathBuf>> {
-        // Load plugin manifest and filter config
-        let manifest = PluginManifest::load(&self.path)?;
-        let filter = FilterConfig::load(&self.path)?;
+        // Use cached manifest and filter
+        let manifest = self.manifest()?;
+        let filter = self.filter_config()?;
 
         // Build allowed filter upfront
-        let allowed = AllowedFilter::new(&manifest, &filter);
+        let allowed = AllowedFilter::new(&manifest.cloned(), &filter.cloned());
 
         // Walk all files and collect only those matching the filter
         let mut files: Vec<PathBuf> = Vec::new();
@@ -748,5 +835,42 @@ mod tests {
 
         // Static ignores still work
         assert!(config.should_ignore(Path::new(".DS_Store")));
+    }
+
+    #[test]
+    fn profile_lazy_load_returns_none_for_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let profile = Profile::new("test".to_string(), tmp.path().to_path_buf());
+
+        // No manifest file exists
+        assert!(profile.manifest().unwrap().is_none());
+
+        // No metadata file exists
+        assert!(profile.metadata().unwrap().is_none());
+
+        // No filter config exists
+        assert!(profile.filter_config().unwrap().is_none());
+    }
+
+    #[test]
+    fn profile_source_defaults_to_local() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let profile = Profile::new("test".to_string(), tmp.path().to_path_buf());
+
+        // Without metadata, source defaults to Local
+        let source = profile.source().unwrap();
+        assert!(matches!(source, ProfileSource::Local));
+    }
+
+    #[test]
+    fn profile_plugin_defaults() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let profile = Profile::new("test".to_string(), tmp.path().to_path_buf());
+
+        // Without metadata, plugin_enabled defaults to true
+        assert!(profile.plugin_enabled().unwrap());
+
+        // Without metadata, plugin_scope defaults to User
+        assert!(matches!(profile.plugin_scope().unwrap(), PluginScope::User));
     }
 }

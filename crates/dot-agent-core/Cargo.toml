@@ -16,6 +16,7 @@ chrono.workspace = true
 dirs.workspace = true
 glob.workspace = true
 hex.workspace = true
+once_cell = "1.21.3"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -823,6 +823,7 @@ dependencies = [
  "dirs",
  "glob",
  "hex",
+ "once_cell",
  "serde",
  "serde_json",
  "sha2",
