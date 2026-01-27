@@ -17,7 +17,7 @@ pub use channel::{
 };
 pub use config::Config;
 pub use error::{DotAgentError, Result};
-pub use installer::{DiffResult, FileInfo, FileStatus, InstallResult, Installer};
+pub use installer::{DiffResult, FileInfo, FileStatus, InstallOptions, InstallResult, Installer};
 pub use json_merge::{
     is_mergeable_json, merge_json, merge_json_file, unmerge_json, unmerge_json_file, MergeRecord,
     MergeResult, UnmergeResult,

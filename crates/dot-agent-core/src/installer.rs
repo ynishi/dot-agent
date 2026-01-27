@@ -54,6 +54,82 @@ pub struct DiffResult {
     pub files: Vec<FileInfo>,
 }
 
+/// Options for install/upgrade/remove operations
+#[derive(Default)]
+pub struct InstallOptions<'a> {
+    /// Force overwrite of existing files
+    pub force: bool,
+    /// Don't actually make changes, just show what would happen
+    pub dry_run: bool,
+    /// Don't add profile prefix to file names (install/upgrade only)
+    pub no_prefix: bool,
+    /// Don't merge JSON files (hooks.json, settings.json, etc.)
+    pub no_merge: bool,
+    /// File ignore configuration
+    pub ignore_config: IgnoreConfig,
+    /// Callback for file operation progress
+    pub on_file: FileCallback<'a>,
+}
+
+impl std::fmt::Debug for InstallOptions<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallOptions")
+            .field("force", &self.force)
+            .field("dry_run", &self.dry_run)
+            .field("no_prefix", &self.no_prefix)
+            .field("no_merge", &self.no_merge)
+            .field("ignore_config", &self.ignore_config)
+            .field("on_file", &self.on_file.is_some())
+            .finish()
+    }
+}
+
+impl<'a> InstallOptions<'a> {
+    /// Create new options with defaults
+    pub fn new() -> Self {
+        Self {
+            ignore_config: IgnoreConfig::with_defaults(),
+            ..Default::default()
+        }
+    }
+
+    /// Set force flag
+    pub fn force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+
+    /// Set dry_run flag
+    pub fn dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    /// Set no_prefix flag
+    pub fn no_prefix(mut self, no_prefix: bool) -> Self {
+        self.no_prefix = no_prefix;
+        self
+    }
+
+    /// Set no_merge flag
+    pub fn no_merge(mut self, no_merge: bool) -> Self {
+        self.no_merge = no_merge;
+        self
+    }
+
+    /// Set ignore configuration
+    pub fn ignore_config(mut self, config: IgnoreConfig) -> Self {
+        self.ignore_config = config;
+        self
+    }
+
+    /// Set file callback
+    pub fn on_file(mut self, callback: FileCallback<'a>) -> Self {
+        self.on_file = callback;
+        self
+    }
+}
+
 pub struct Installer {
     base_dir: PathBuf,
 }
@@ -82,31 +158,25 @@ impl Installer {
     }
 
     /// Install a profile to target
-    #[allow(clippy::too_many_arguments)]
     pub fn install(
         &self,
         profile: &Profile,
         target: &Path,
-        force: bool,
-        dry_run: bool,
-        no_prefix: bool,
-        no_merge: bool,
-        ignore_config: &IgnoreConfig,
-        on_file: FileCallback<'_>,
+        opts: &InstallOptions<'_>,
     ) -> Result<InstallResult> {
         let mut result = InstallResult::default();
         let mut metadata = Metadata::load(target)?.unwrap_or_else(|| Metadata::new(&self.base_dir));
 
         // Ensure target directory exists
-        if !dry_run && !target.exists() {
+        if !opts.dry_run && !target.exists() {
             fs::create_dir_all(target)?;
         }
 
-        let files = profile.list_files_with_config(ignore_config)?;
+        let files = profile.list_files_with_config(&opts.ignore_config)?;
 
         for relative_path in files {
             let src = profile.path.join(&relative_path);
-            let prefixed_path = if no_prefix {
+            let prefixed_path = if opts.no_prefix {
                 relative_path.clone()
             } else {
                 prefix_path(&relative_path, &profile.name)
@@ -118,18 +188,18 @@ impl Installer {
             let is_mergeable = is_mergeable_json(&relative_path);
 
             // Handle mergeable JSON files
-            if is_mergeable && !no_merge && dst.exists() {
+            if is_mergeable && !opts.no_merge && dst.exists() {
                 let merge_result = merge_json_file(&dst, &src, &profile.name)?;
 
                 if !merge_result.changed {
-                    if let Some(f) = on_file {
+                    if let Some(f) = opts.on_file {
                         f("SKIP", &relative_str);
                     }
                     result.skipped += 1;
                     continue;
                 }
 
-                if !dry_run {
+                if !opts.dry_run {
                     if let Some(parent) = dst.parent() {
                         fs::create_dir_all(parent)?;
                     }
@@ -141,7 +211,7 @@ impl Installer {
                     );
                 }
 
-                if let Some(f) = on_file {
+                if let Some(f) = opts.on_file {
                     f("MERGE", &relative_str);
                 }
                 result.merged += 1;
@@ -156,7 +226,7 @@ impl Installer {
 
                 if src_hash == dst_hash {
                     // Same content - skip
-                    if let Some(f) = on_file {
+                    if let Some(f) = opts.on_file {
                         f("SKIP", &relative_str);
                     }
                     result.skipped += 1;
@@ -165,7 +235,7 @@ impl Installer {
 
                 // CLAUDE.md is never overwritten
                 if is_claude_md {
-                    if let Some(f) = on_file {
+                    if let Some(f) = opts.on_file {
                         f("WARN", &relative_str);
                     }
                     result.skipped += 1;
@@ -173,8 +243,8 @@ impl Installer {
                 }
 
                 // Different content - for JSON files with no_merge, this is a conflict
-                if !force {
-                    if let Some(f) = on_file {
+                if !opts.force {
+                    if let Some(f) = opts.on_file {
                         f("CONFLICT", &relative_str);
                     }
                     result.conflicts += 1;
@@ -183,13 +253,13 @@ impl Installer {
             }
 
             // Copy file (or write merged JSON for new files)
-            if !dry_run {
+            if !opts.dry_run {
                 if let Some(parent) = dst.parent() {
                     fs::create_dir_all(parent)?;
                 }
 
                 // For new mergeable JSON files, add profile marker
-                if is_mergeable && !no_merge {
+                if is_mergeable && !opts.no_merge {
                     let merge_result = merge_json_file(&dst, &src, &profile.name)?;
                     fs::write(&dst, &merge_result.content)?;
                     metadata.add_merged(
@@ -204,13 +274,13 @@ impl Installer {
                 }
             }
 
-            if let Some(f) = on_file {
+            if let Some(f) = opts.on_file {
                 f("OK", &relative_str);
             }
             result.installed += 1;
         }
 
-        if !dry_run && result.conflicts == 0 {
+        if !opts.dry_run && result.conflicts == 0 {
             metadata.add_profile(&profile.name);
             metadata.save(target)?;
         }
@@ -306,33 +376,28 @@ impl Installer {
     }
 
     /// Remove installed profile files
-    #[allow(clippy::too_many_arguments)]
     pub fn remove(
         &self,
         profile: &Profile,
         target: &Path,
-        force: bool,
-        dry_run: bool,
-        no_merge: bool,
-        ignore_config: &IgnoreConfig,
-        on_file: FileCallback<'_>,
+        opts: &InstallOptions<'_>,
     ) -> Result<(usize, usize, usize)> {
         if !target.exists() {
             return Ok((0, 0, 0));
         }
 
         let mut metadata = Metadata::load(target)?.unwrap_or_else(|| Metadata::new(&self.base_dir));
-        let diff = self.diff(profile, target, ignore_config)?;
+        let diff = self.diff(profile, target, &opts.ignore_config)?;
 
         // Check for local modifications
         // Skip mergeable JSON files - they are expected to differ due to profile markers
-        if !force {
+        if !opts.force {
             let modified: Vec<_> = diff
                 .files
                 .iter()
                 .filter(|f| {
                     f.status == FileStatus::Modified
-                        && (no_merge || !is_mergeable_json(&f.relative_path))
+                        && (opts.no_merge || !is_mergeable_json(&f.relative_path))
                 })
                 .map(|f| f.relative_path.clone())
                 .collect();
@@ -347,7 +412,7 @@ impl Installer {
         let mut unmerged = 0;
 
         // First, handle unmerging from JSON files
-        if !no_merge {
+        if !opts.no_merge {
             if let Some(merged_files) = metadata.get_merged_files(&profile.name).cloned() {
                 for (file_path, _json_paths) in merged_files {
                     let dst = target.join(&file_path);
@@ -357,10 +422,10 @@ impl Installer {
 
                     if let Some(result) = unmerge_json_file(&dst, &profile.name)? {
                         if result.changed {
-                            if !dry_run {
+                            if !opts.dry_run {
                                 fs::write(&dst, &result.content)?;
                             }
-                            if let Some(f) = on_file {
+                            if let Some(f) = opts.on_file {
                                 f("UNMERGE", &file_path);
                             }
                             unmerged += 1;
@@ -376,7 +441,7 @@ impl Installer {
 
             // Never remove CLAUDE.md
             if relative_str == CLAUDE_MD {
-                if let Some(f) = on_file {
+                if let Some(f) = opts.on_file {
                     f("KEEP", &relative_str);
                 }
                 kept += 1;
@@ -385,7 +450,7 @@ impl Installer {
 
             // Skip user-added files
             if file_info.status == FileStatus::Added {
-                if let Some(f) = on_file {
+                if let Some(f) = opts.on_file {
                     f("KEEP", &relative_str);
                 }
                 kept += 1;
@@ -398,7 +463,7 @@ impl Installer {
             }
 
             // Skip merged JSON files (already handled above)
-            if !no_merge && is_mergeable_json(&file_info.relative_path) {
+            if !opts.no_merge && is_mergeable_json(&file_info.relative_path) {
                 // Only delete if we own this file entirely (not merged)
                 if metadata.get_merged(&profile.name, &relative_str).is_some() {
                     continue;
@@ -406,7 +471,7 @@ impl Installer {
             }
 
             // Remove file
-            if !dry_run && dst.exists() {
+            if !opts.dry_run && dst.exists() {
                 fs::remove_file(&dst)?;
                 let meta_key = make_meta_key(&profile.name, &relative_str);
                 metadata.remove_file(&meta_key);
@@ -417,13 +482,13 @@ impl Installer {
                 }
             }
 
-            if let Some(f) = on_file {
+            if let Some(f) = opts.on_file {
                 f("DEL", &relative_str);
             }
             removed += 1;
         }
 
-        if !dry_run {
+        if !opts.dry_run {
             metadata.remove_profile(&profile.name);
             metadata.remove_merged(&profile.name);
             if metadata.installed.profiles.is_empty()
@@ -442,31 +507,16 @@ impl Installer {
     }
 
     /// Upgrade profile files
-    #[allow(clippy::too_many_arguments)]
     pub fn upgrade(
         &self,
         profile: &Profile,
         target: &Path,
-        force: bool,
-        dry_run: bool,
-        no_prefix: bool,
-        no_merge: bool,
-        ignore_config: &IgnoreConfig,
-        on_file: FileCallback<'_>,
+        opts: &InstallOptions<'_>,
     ) -> Result<(usize, usize, usize, usize)> {
         // updated, new, skipped, unchanged
         if !target.exists() {
             // Just install everything
-            let result = self.install(
-                profile,
-                target,
-                force,
-                dry_run,
-                no_prefix,
-                no_merge,
-                ignore_config,
-                on_file,
-            )?;
+            let result = self.install(profile, target, opts)?;
             return Ok((0, result.installed, 0, 0));
         }
 
@@ -476,11 +526,11 @@ impl Installer {
         let mut skipped = 0;
         let mut unchanged = 0;
 
-        let files = profile.list_files_with_config(ignore_config)?;
+        let files = profile.list_files_with_config(&opts.ignore_config)?;
 
         for relative_path in files {
             let src = profile.path.join(&relative_path);
-            let prefixed_path = if no_prefix {
+            let prefixed_path = if opts.no_prefix {
                 relative_path.clone()
             } else {
                 prefix_path(&relative_path, &profile.name)
@@ -496,14 +546,14 @@ impl Installer {
 
             if !dst.exists() {
                 // New file
-                if !dry_run {
+                if !opts.dry_run {
                     if let Some(parent) = dst.parent() {
                         fs::create_dir_all(parent)?;
                     }
                     fs::write(&dst, &src_content)?;
                     metadata.add_file(&meta_key, &src_hash);
                 }
-                if let Some(f) = on_file {
+                if let Some(f) = opts.on_file {
                     f("NEW", &relative_str);
                 }
                 new += 1;
@@ -513,7 +563,7 @@ impl Installer {
             let dst_hash = compute_file_hash(&dst)?;
 
             if src_hash == dst_hash {
-                if let Some(f) = on_file {
+                if let Some(f) = opts.on_file {
                     f("OK", &relative_str);
                 }
                 unchanged += 1;
@@ -522,7 +572,7 @@ impl Installer {
 
             // CLAUDE.md is never overwritten
             if is_claude_md {
-                if let Some(f) = on_file {
+                if let Some(f) = opts.on_file {
                     f("WARN", &relative_str);
                 }
                 skipped += 1;
@@ -533,8 +583,8 @@ impl Installer {
             let original_hash = metadata.get_file_hash(&meta_key);
             let locally_modified = original_hash.map(|h| h != &dst_hash).unwrap_or(false);
 
-            if locally_modified && !force {
-                if let Some(f) = on_file {
+            if locally_modified && !opts.force {
+                if let Some(f) = opts.on_file {
                     f("SKIP", &relative_str);
                 }
                 skipped += 1;
@@ -542,17 +592,17 @@ impl Installer {
             }
 
             // Update file
-            if !dry_run {
+            if !opts.dry_run {
                 fs::write(&dst, &src_content)?;
                 metadata.add_file(&meta_key, &src_hash);
             }
-            if let Some(f) = on_file {
+            if let Some(f) = opts.on_file {
                 f("UPDATE", &relative_str);
             }
             updated += 1;
         }
 
-        if !dry_run {
+        if !opts.dry_run {
             metadata.add_profile(&profile.name);
             metadata.save(target)?;
         }

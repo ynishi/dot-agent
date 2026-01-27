@@ -8,7 +8,7 @@ use colored::Colorize;
 
 use dot_agent_core::channel::ChannelManager;
 use dot_agent_core::config::Config;
-use dot_agent_core::installer::{FileStatus, Installer};
+use dot_agent_core::installer::{FileStatus, InstallOptions, Installer};
 use dot_agent_core::metadata::Metadata;
 use dot_agent_core::profile::{IgnoreConfig, ProfileManager};
 use dot_agent_core::{DotAgentError, Result};
@@ -1084,16 +1084,14 @@ fn handle_install(
         println!("  {} {}", status_str, path);
     };
 
-    let result = installer.install(
-        &profile,
-        &target_dir,
-        force,
-        dry_run,
-        no_prefix,
-        no_merge,
-        &ignore_config,
-        Some(&on_file),
-    )?;
+    let opts = InstallOptions::new()
+        .force(force)
+        .dry_run(dry_run)
+        .no_prefix(no_prefix)
+        .no_merge(no_merge)
+        .ignore_config(ignore_config.clone())
+        .on_file(Some(&on_file));
+    let result = installer.install(&profile, &target_dir, &opts)?;
 
     println!();
     println!("Summary:");
@@ -1223,16 +1221,14 @@ fn handle_upgrade(
         println!("  {} {}", status_str, path);
     };
 
-    let (updated, new, skipped, unchanged) = installer.upgrade(
-        &profile,
-        &target_dir,
-        force,
-        dry_run,
-        no_prefix,
-        no_merge,
-        &ignore_config,
-        Some(&on_file),
-    )?;
+    let opts = InstallOptions::new()
+        .force(force)
+        .dry_run(dry_run)
+        .no_prefix(no_prefix)
+        .no_merge(no_merge)
+        .ignore_config(ignore_config.clone())
+        .on_file(Some(&on_file));
+    let (updated, new, skipped, unchanged) = installer.upgrade(&profile, &target_dir, &opts)?;
 
     println!();
     println!("Summary:");
@@ -1338,15 +1334,13 @@ fn handle_remove(
         println!("  {} {}", status_str, path);
     };
 
-    let (removed, kept, unmerged) = installer.remove(
-        &profile,
-        &target_dir,
-        force,
-        dry_run,
-        no_merge,
-        &ignore_config,
-        Some(&on_file),
-    )?;
+    let opts = InstallOptions::new()
+        .force(force)
+        .dry_run(dry_run)
+        .no_merge(no_merge)
+        .ignore_config(ignore_config.clone())
+        .on_file(Some(&on_file));
+    let (removed, kept, unmerged) = installer.remove(&profile, &target_dir, &opts)?;
 
     // Unregister plugin if profile had plugin features
     if !dry_run {
@@ -2434,16 +2428,10 @@ fn handle_switch(
             "No profiles currently installed. Installing {}...",
             profile_name
         );
-        let result = installer.install(
-            &new_profile,
-            &target_dir,
-            force,
-            false, // dry_run
-            false, // no_prefix
-            false, // no_merge
-            &ignore_config,
-            None,
-        )?;
+        let opts = InstallOptions::new()
+            .force(force)
+            .ignore_config(ignore_config.clone());
+        let result = installer.install(&new_profile, &target_dir, &opts)?;
         println!();
         println!("{} Installed {} files.", "Done:".green(), result.installed);
         return Ok(());
@@ -2471,17 +2459,12 @@ fn handle_switch(
     // Remove current profiles
     println!();
     println!("Removing current profiles...");
+    let remove_opts = InstallOptions::new()
+        .force(force)
+        .ignore_config(ignore_config.clone());
     for current_name in &current_profiles {
         if let Ok(current_profile) = profile_manager.get_profile(current_name) {
-            match installer.remove(
-                &current_profile,
-                &target_dir,
-                force,
-                false, // dry_run
-                false, // no_merge
-                &ignore_config,
-                None,
-            ) {
+            match installer.remove(&current_profile, &target_dir, &remove_opts) {
                 Ok((removed, _, _)) => {
                     println!(
                         "  {} {} ({} files)",
@@ -2500,16 +2483,10 @@ fn handle_switch(
     // Install new profile
     println!();
     println!("Installing {}...", profile_name);
-    let result = installer.install(
-        &new_profile,
-        &target_dir,
-        force,
-        false, // dry_run
-        false, // no_prefix
-        false, // no_merge
-        &ignore_config,
-        None,
-    )?;
+    let install_opts = InstallOptions::new()
+        .force(force)
+        .ignore_config(ignore_config.clone());
+    let result = installer.install(&new_profile, &target_dir, &install_opts)?;
 
     println!();
     println!("{}", "Switch complete!".green());

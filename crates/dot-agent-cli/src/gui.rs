@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use dot_agent_core::installer::Installer;
+use dot_agent_core::installer::{InstallOptions, Installer};
 use dot_agent_core::profile::ProfileManager;
 use dot_agent_core::rule::RuleManager;
 use dot_agent_core::{DotAgentError, Result};
@@ -379,14 +379,10 @@ impl DotAgentApp {
 
         match installer.resolve_target(target.as_deref(), self.install_global) {
             Ok(target_dir) => {
-                match installer.install(
-                    profile,
-                    &target_dir,
-                    self.force,
-                    false,
-                    self.no_prefix,
-                    None,
-                ) {
+                let opts = InstallOptions::new()
+                    .force(self.force)
+                    .no_prefix(self.no_prefix);
+                match installer.install(profile, &target_dir, &opts) {
                     Ok(result) => {
                         self.status_message = Some((
                             format!(
