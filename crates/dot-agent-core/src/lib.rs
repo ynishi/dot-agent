@@ -2,6 +2,7 @@ pub mod channel;
 pub mod config;
 pub mod error;
 pub mod installer;
+pub mod json_merge;
 pub mod metadata;
 pub mod plugin_registrar;
 pub mod profile;
@@ -16,6 +17,10 @@ pub use channel::{
 pub use config::Config;
 pub use error::{DotAgentError, Result};
 pub use installer::{DiffResult, FileInfo, FileStatus, InstallResult, Installer};
+pub use json_merge::{
+    is_mergeable_json, merge_json, merge_json_file, unmerge_json, unmerge_json_file, MergeRecord,
+    MergeResult, UnmergeResult,
+};
 pub use metadata::Metadata;
 pub use plugin_registrar::{PluginRegistrar, PluginRegistrationResult};
 pub use profile::{IgnoreConfig, Profile, ProfileManager, DEFAULT_EXCLUDED_DIRS};

@@ -77,6 +77,7 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            no_merge,
             include,
             exclude,
         }) => handle_install(
@@ -87,6 +88,7 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            no_merge,
             build_ignore_config(&base_dir, &include, &exclude),
         ),
         Some(Commands::Upgrade {
@@ -96,6 +98,7 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            no_merge,
             include,
             exclude,
         }) => handle_upgrade(
@@ -106,6 +109,7 @@ fn main() -> ExitCode {
             force,
             dry_run,
             no_prefix,
+            no_merge,
             build_ignore_config(&base_dir, &include, &exclude),
         ),
         Some(Commands::Diff {
@@ -127,6 +131,7 @@ fn main() -> ExitCode {
             global,
             force,
             dry_run,
+            no_merge,
             include,
             exclude,
         }) => handle_remove(
@@ -136,6 +141,7 @@ fn main() -> ExitCode {
             global,
             force,
             dry_run,
+            no_merge,
             build_ignore_config(&base_dir, &include, &exclude),
         ),
         Some(Commands::Status { path, global }) => {
@@ -1030,6 +1036,7 @@ fn handle_install(
     force: bool,
     dry_run: bool,
     no_prefix: bool,
+    no_merge: bool,
     ignore_config: IgnoreConfig,
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
@@ -1059,6 +1066,9 @@ fn handle_install(
     if no_prefix {
         println!("{}", "(no prefix)".yellow());
     }
+    if no_merge {
+        println!("{}", "(no merge)".yellow());
+    }
     println!();
     println!("Installing...");
 
@@ -1068,6 +1078,7 @@ fn handle_install(
             "SKIP" => format!("[{}]", status).yellow(),
             "WARN" => format!("[{}]", status).yellow().bold(),
             "CONFLICT" => format!("[{}]", status).red().bold(),
+            "MERGE" => format!("[{}]", status).cyan(),
             _ => format!("[{}]", status).normal(),
         };
         println!("  {} {}", status_str, path);
@@ -1079,6 +1090,7 @@ fn handle_install(
         force,
         dry_run,
         no_prefix,
+        no_merge,
         &ignore_config,
         Some(&on_file),
     )?;
@@ -1086,6 +1098,9 @@ fn handle_install(
     println!();
     println!("Summary:");
     println!("  Installed: {}", result.installed);
+    if result.merged > 0 {
+        println!("  Merged: {}", result.merged);
+    }
     println!("  Skipped: {}", result.skipped);
     println!("  Conflicts: {}", result.conflicts);
 
@@ -1174,6 +1189,7 @@ fn handle_upgrade(
     force: bool,
     dry_run: bool,
     no_prefix: bool,
+    no_merge: bool,
     ignore_config: IgnoreConfig,
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
@@ -1188,6 +1204,9 @@ fn handle_upgrade(
     if dry_run {
         println!("{}", "(dry run)".yellow());
     }
+    if no_merge {
+        println!("{}", "(no merge)".yellow());
+    }
     println!();
     println!("Checking for updates...");
 
@@ -1198,6 +1217,7 @@ fn handle_upgrade(
             "UPDATE" => format!("[{}]", status).cyan(),
             "SKIP" => format!("[{}]", status).yellow(),
             "WARN" => format!("[{}]", status).yellow().bold(),
+            "MERGE" => format!("[{}]", status).cyan(),
             _ => format!("[{}]", status).normal(),
         };
         println!("  {} {}", status_str, path);
@@ -1209,6 +1229,7 @@ fn handle_upgrade(
         force,
         dry_run,
         no_prefix,
+        no_merge,
         &ignore_config,
         Some(&on_file),
     )?;
@@ -1278,6 +1299,7 @@ fn handle_diff(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_remove(
     base_dir: &Path,
     profile_name: &str,
@@ -1285,6 +1307,7 @@ fn handle_remove(
     global: bool,
     force: bool,
     dry_run: bool,
+    no_merge: bool,
     ignore_config: IgnoreConfig,
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
@@ -1299,6 +1322,9 @@ fn handle_remove(
     if dry_run {
         println!("{}", "(dry run)".yellow());
     }
+    if no_merge {
+        println!("{}", "(no merge)".yellow());
+    }
     println!();
     println!("Checking for local modifications...");
 
@@ -1306,16 +1332,18 @@ fn handle_remove(
         let status_str = match status {
             "KEEP" => format!("[{}]", status).blue(),
             "DEL" => format!("[{}]", status).red(),
+            "UNMERGE" => format!("[{}]", status).cyan(),
             _ => format!("[{}]", status).normal(),
         };
         println!("  {} {}", status_str, path);
     };
 
-    let (removed, kept) = installer.remove(
+    let (removed, kept, unmerged) = installer.remove(
         &profile,
         &target_dir,
         force,
         dry_run,
+        no_merge,
         &ignore_config,
         Some(&on_file),
     )?;
@@ -1359,6 +1387,9 @@ fn handle_remove(
     println!();
     println!("Summary:");
     println!("  Removed: {}", removed);
+    if unmerged > 0 {
+        println!("  Unmerged: {}", unmerged);
+    }
     println!("  Kept: {} (user files)", kept);
     println!();
     println!("{}", "Removal complete.".green());
@@ -2407,8 +2438,9 @@ fn handle_switch(
             &new_profile,
             &target_dir,
             force,
-            false,
-            false,
+            false, // dry_run
+            false, // no_prefix
+            false, // no_merge
             &ignore_config,
             None,
         )?;
@@ -2445,11 +2477,12 @@ fn handle_switch(
                 &current_profile,
                 &target_dir,
                 force,
-                false,
+                false, // dry_run
+                false, // no_merge
                 &ignore_config,
                 None,
             ) {
-                Ok((removed, _)) => {
+                Ok((removed, _, _)) => {
                     println!(
                         "  {} {} ({} files)",
                         "Removed:".red(),
@@ -2471,8 +2504,9 @@ fn handle_switch(
         &new_profile,
         &target_dir,
         force,
-        false,
-        false,
+        false, // dry_run
+        false, // no_prefix
+        false, // no_merge
         &ignore_config,
         None,
     )?;

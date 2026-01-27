@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{DotAgentError, Result};
+use crate::json_merge::{is_mergeable_json, merge_json_file, unmerge_json_file};
 use crate::metadata::{compute_file_hash, compute_hash, Metadata};
 use crate::profile::{IgnoreConfig, Profile};
 
@@ -41,6 +42,7 @@ pub struct InstallResult {
     pub installed: usize,
     pub skipped: usize,
     pub conflicts: usize,
+    pub merged: usize,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +90,7 @@ impl Installer {
         force: bool,
         dry_run: bool,
         no_prefix: bool,
+        no_merge: bool,
         ignore_config: &IgnoreConfig,
         on_file: FileCallback<'_>,
     ) -> Result<InstallResult> {
@@ -112,6 +115,39 @@ impl Installer {
             let relative_str = prefixed_path.to_string_lossy().to_string();
 
             let is_claude_md = relative_path.to_string_lossy() == CLAUDE_MD;
+            let is_mergeable = is_mergeable_json(&relative_path);
+
+            // Handle mergeable JSON files
+            if is_mergeable && !no_merge && dst.exists() {
+                let merge_result = merge_json_file(&dst, &src, &profile.name)?;
+
+                if !merge_result.changed {
+                    if let Some(f) = on_file {
+                        f("SKIP", &relative_str);
+                    }
+                    result.skipped += 1;
+                    continue;
+                }
+
+                if !dry_run {
+                    if let Some(parent) = dst.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(&dst, &merge_result.content)?;
+                    metadata.add_merged(
+                        &profile.name,
+                        &relative_str,
+                        merge_result.record.added_paths,
+                    );
+                }
+
+                if let Some(f) = on_file {
+                    f("MERGE", &relative_str);
+                }
+                result.merged += 1;
+                continue;
+            }
+
             let src_content = fs::read(&src)?;
             let src_hash = compute_hash(&src_content);
 
@@ -136,7 +172,7 @@ impl Installer {
                     continue;
                 }
 
-                // Different content
+                // Different content - for JSON files with no_merge, this is a conflict
                 if !force {
                     if let Some(f) = on_file {
                         f("CONFLICT", &relative_str);
@@ -146,14 +182,26 @@ impl Installer {
                 }
             }
 
-            // Copy file
+            // Copy file (or write merged JSON for new files)
             if !dry_run {
                 if let Some(parent) = dst.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                fs::write(&dst, &src_content)?;
-                let meta_key = make_meta_key(&profile.name, &relative_str);
-                metadata.add_file(&meta_key, &src_hash);
+
+                // For new mergeable JSON files, add profile marker
+                if is_mergeable && !no_merge {
+                    let merge_result = merge_json_file(&dst, &src, &profile.name)?;
+                    fs::write(&dst, &merge_result.content)?;
+                    metadata.add_merged(
+                        &profile.name,
+                        &relative_str,
+                        merge_result.record.added_paths,
+                    );
+                } else {
+                    fs::write(&dst, &src_content)?;
+                    let meta_key = make_meta_key(&profile.name, &relative_str);
+                    metadata.add_file(&meta_key, &src_hash);
+                }
             }
 
             if let Some(f) = on_file {
@@ -258,17 +306,19 @@ impl Installer {
     }
 
     /// Remove installed profile files
+    #[allow(clippy::too_many_arguments)]
     pub fn remove(
         &self,
         profile: &Profile,
         target: &Path,
         force: bool,
         dry_run: bool,
+        no_merge: bool,
         ignore_config: &IgnoreConfig,
         on_file: FileCallback<'_>,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, usize, usize)> {
         if !target.exists() {
-            return Ok((0, 0));
+            return Ok((0, 0, 0));
         }
 
         let mut metadata = Metadata::load(target)?.unwrap_or_else(|| Metadata::new(&self.base_dir));
@@ -290,6 +340,31 @@ impl Installer {
 
         let mut removed = 0;
         let mut kept = 0;
+        let mut unmerged = 0;
+
+        // First, handle unmerging from JSON files
+        if !no_merge {
+            if let Some(merged_files) = metadata.get_merged_files(&profile.name).cloned() {
+                for (file_path, _json_paths) in merged_files {
+                    let dst = target.join(&file_path);
+                    if !dst.exists() {
+                        continue;
+                    }
+
+                    if let Some(result) = unmerge_json_file(&dst, &profile.name)? {
+                        if result.changed {
+                            if !dry_run {
+                                fs::write(&dst, &result.content)?;
+                            }
+                            if let Some(f) = on_file {
+                                f("UNMERGE", &file_path);
+                            }
+                            unmerged += 1;
+                        }
+                    }
+                }
+            }
+        }
 
         for file_info in &diff.files {
             let dst = target.join(&file_info.relative_path);
@@ -318,6 +393,14 @@ impl Installer {
                 continue;
             }
 
+            // Skip merged JSON files (already handled above)
+            if !no_merge && is_mergeable_json(&file_info.relative_path) {
+                // Only delete if we own this file entirely (not merged)
+                if metadata.get_merged(&profile.name, &relative_str).is_some() {
+                    continue;
+                }
+            }
+
             // Remove file
             if !dry_run && dst.exists() {
                 fs::remove_file(&dst)?;
@@ -338,7 +421,11 @@ impl Installer {
 
         if !dry_run {
             metadata.remove_profile(&profile.name);
-            if metadata.installed.profiles.is_empty() && metadata.files.is_empty() {
+            metadata.remove_merged(&profile.name);
+            if metadata.installed.profiles.is_empty()
+                && metadata.files.is_empty()
+                && metadata.merged.is_empty()
+            {
                 // Remove metadata file if no profiles left
                 let meta_path = target.join(".dot-agent-meta.toml");
                 let _ = fs::remove_file(meta_path);
@@ -347,7 +434,7 @@ impl Installer {
             }
         }
 
-        Ok((removed, kept))
+        Ok((removed, kept, unmerged))
     }
 
     /// Upgrade profile files
@@ -359,6 +446,7 @@ impl Installer {
         force: bool,
         dry_run: bool,
         no_prefix: bool,
+        no_merge: bool,
         ignore_config: &IgnoreConfig,
         on_file: FileCallback<'_>,
     ) -> Result<(usize, usize, usize, usize)> {
@@ -371,6 +459,7 @@ impl Installer {
                 force,
                 dry_run,
                 no_prefix,
+                no_merge,
                 ignore_config,
                 on_file,
             )?;

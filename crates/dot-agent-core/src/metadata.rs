@@ -14,6 +14,9 @@ const META_FILENAME: &str = ".dot-agent-meta.toml";
 pub struct Metadata {
     pub installed: InstalledInfo,
     pub files: HashMap<String, String>,
+    /// Tracks merged JSON entries per profile: profile_name -> file_path -> [json_paths]
+    #[serde(default)]
+    pub merged: HashMap<String, HashMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,6 +35,7 @@ impl Metadata {
                 base_dir: base_dir.display().to_string(),
             },
             files: HashMap::new(),
+            merged: HashMap::new(),
         }
     }
 
@@ -72,6 +76,27 @@ impl Metadata {
 
     pub fn get_file_hash(&self, path: &str) -> Option<&String> {
         self.files.get(path)
+    }
+
+    /// Record merged JSON paths for a profile
+    pub fn add_merged(&mut self, profile: &str, file_path: &str, json_paths: Vec<String>) {
+        let profile_merged = self.merged.entry(profile.to_string()).or_default();
+        profile_merged.insert(file_path.to_string(), json_paths);
+    }
+
+    /// Get merged JSON paths for a profile and file
+    pub fn get_merged(&self, profile: &str, file_path: &str) -> Option<&Vec<String>> {
+        self.merged.get(profile).and_then(|m| m.get(file_path))
+    }
+
+    /// Get all merged files for a profile
+    pub fn get_merged_files(&self, profile: &str) -> Option<&HashMap<String, Vec<String>>> {
+        self.merged.get(profile)
+    }
+
+    /// Remove all merged entries for a profile
+    pub fn remove_merged(&mut self, profile: &str) {
+        self.merged.remove(profile);
     }
 }
 

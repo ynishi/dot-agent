@@ -95,6 +95,9 @@ pub enum DotAgentError {
 
     #[error("Cannot remove built-in channel: {name}")]
     CannotRemoveBuiltinChannel { name: String },
+
+    #[error("JSON parse error: {message}")]
+    JsonParseError { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -124,6 +127,7 @@ impl DotAgentError {
             Self::ChannelAlreadyExists { .. } => 21,
             Self::ChannelNotFound { .. } => 22,
             Self::CannotRemoveBuiltinChannel { .. } => 23,
+            Self::JsonParseError { .. } => 24,
             _ => 1,
         }
     }

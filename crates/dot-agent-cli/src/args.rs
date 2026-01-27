@@ -133,6 +133,10 @@ pub enum Commands {
         #[arg(long)]
         no_prefix: bool,
 
+        /// Don't merge JSON files (hooks.json, mcp.json, etc.) - conflict on existing files
+        #[arg(long)]
+        no_merge: bool,
+
         /// Include directories that are excluded by default (e.g., --include=.git)
         #[arg(long, value_name = "DIR")]
         include: Vec<String>,
@@ -166,6 +170,10 @@ pub enum Commands {
         /// Don't add profile prefix to files
         #[arg(long)]
         no_prefix: bool,
+
+        /// Don't merge JSON files (hooks.json, mcp.json, etc.)
+        #[arg(long)]
+        no_merge: bool,
 
         /// Include directories that are excluded by default (e.g., --include=.git)
         #[arg(long, value_name = "DIR")]
@@ -218,6 +226,10 @@ pub enum Commands {
         /// Dry run
         #[arg(short, long)]
         dry_run: bool,
+
+        /// Don't unmerge JSON files (hooks.json, mcp.json, etc.) - delete entire files
+        #[arg(long)]
+        no_merge: bool,
 
         /// Include directories that are excluded by default (e.g., --include=.git)
         #[arg(long, value_name = "DIR")]
