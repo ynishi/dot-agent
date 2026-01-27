@@ -99,7 +99,10 @@ impl ChannelType {
 
     /// Whether this channel type supports search
     pub fn is_searchable(&self) -> bool {
-        matches!(self, Self::GitHubGlobal | Self::AwesomeList | Self::Marketplace)
+        matches!(
+            self,
+            Self::GitHubGlobal | Self::AwesomeList | Self::Marketplace
+        )
     }
 }
 

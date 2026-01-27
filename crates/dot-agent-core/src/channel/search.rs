@@ -59,7 +59,10 @@ impl MarketplacePlugin {
                 .get("version")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
-            source: value.get("source").cloned().unwrap_or(serde_json::Value::Null),
+            source: value
+                .get("source")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
             category: value
                 .get("category")
                 .and_then(|v| v.as_str())
@@ -117,11 +120,10 @@ impl MarketplacePlugin {
         // Write .lsp.json if lspServers is defined
         if let Some(lsp) = &self.lsp_servers {
             let lsp_path = target_dir.join(".lsp.json");
-            let content = serde_json::to_string_pretty(lsp).map_err(|e| {
-                DotAgentError::GitHubApiError {
+            let content =
+                serde_json::to_string_pretty(lsp).map_err(|e| DotAgentError::GitHubApiError {
                     message: format!("Failed to serialize lspServers: {}", e),
-                }
-            })?;
+                })?;
             fs::write(&lsp_path, content)?;
             written_files.push(".lsp.json".to_string());
         }
@@ -129,11 +131,10 @@ impl MarketplacePlugin {
         // Write .mcp.json if mcpServers is defined
         if let Some(mcp) = &self.mcp_servers {
             let mcp_path = target_dir.join(".mcp.json");
-            let content = serde_json::to_string_pretty(mcp).map_err(|e| {
-                DotAgentError::GitHubApiError {
+            let content =
+                serde_json::to_string_pretty(mcp).map_err(|e| DotAgentError::GitHubApiError {
                     message: format!("Failed to serialize mcpServers: {}", e),
-                }
-            })?;
+                })?;
             fs::write(&mcp_path, content)?;
             written_files.push(".mcp.json".to_string());
         }
@@ -141,11 +142,10 @@ impl MarketplacePlugin {
         // Write hooks.json if hooks is defined
         if let Some(hooks) = &self.hooks {
             let hooks_path = target_dir.join("hooks.json");
-            let content = serde_json::to_string_pretty(hooks).map_err(|e| {
-                DotAgentError::GitHubApiError {
+            let content =
+                serde_json::to_string_pretty(hooks).map_err(|e| DotAgentError::GitHubApiError {
                     message: format!("Failed to serialize hooks: {}", e),
-                }
-            })?;
+                })?;
             fs::write(&hooks_path, content)?;
             written_files.push("hooks.json".to_string());
         }
@@ -434,7 +434,10 @@ impl ChannelManager {
             c
         } else {
             return Err(DotAgentError::GitHubApiError {
-                message: format!("Failed to fetch README from: {} (tried main and master)", url),
+                message: format!(
+                    "Failed to fetch README from: {} (tried main and master)",
+                    url
+                ),
             });
         };
 
@@ -599,19 +602,19 @@ impl ChannelManager {
             _ => {
                 if let Some(url) = channel.source.url() {
                     // Try main first, then master
-                    let content =
-                        if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "main"))? {
-                            c
-                        } else if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "master"))? {
-                            c
-                        } else {
-                            return Err(DotAgentError::GitHubApiError {
-                                message: format!(
-                                    "Failed to fetch README from: {} (tried main and master)",
-                                    url
-                                ),
-                            });
-                        };
+                    let content = if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "main"))?
+                    {
+                        c
+                    } else if let Some(c) = Self::fetch_url(&Self::to_raw_url(url, "master"))? {
+                        c
+                    } else {
+                        return Err(DotAgentError::GitHubApiError {
+                            message: format!(
+                                "Failed to fetch README from: {} (tried main and master)",
+                                url
+                            ),
+                        });
+                    };
 
                     let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
                     std::fs::create_dir_all(&cache_dir)?;
@@ -652,11 +655,10 @@ impl ChannelManager {
         };
 
         // Validate JSON structure
-        let data: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-            DotAgentError::GitHubApiError {
+        let data: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| DotAgentError::GitHubApiError {
                 message: format!("Invalid marketplace.json: {}", e),
-            }
-        })?;
+            })?;
 
         // Check required fields
         if data.get("name").is_none() || data.get("plugins").is_none() {
@@ -687,11 +689,10 @@ impl ChannelManager {
         }
 
         let content = std::fs::read_to_string(&cache_file)?;
-        let data: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-            DotAgentError::GitHubApiError {
+        let data: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| DotAgentError::GitHubApiError {
                 message: format!("Invalid marketplace.json: {}", e),
-            }
-        })?;
+            })?;
 
         let plugins = data
             .get("plugins")

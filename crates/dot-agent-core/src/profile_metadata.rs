@@ -367,9 +367,7 @@ impl ProfileMetadata {
         let mcp_file = profile_dir.join(".mcp.json");
         let lsp_file = profile_dir.join(".lsp.json");
 
-        (hooks_dir.exists() && hooks_dir.is_dir())
-            || mcp_file.exists()
-            || lsp_file.exists()
+        (hooks_dir.exists() && hooks_dir.is_dir()) || mcp_file.exists() || lsp_file.exists()
     }
 }
 
@@ -390,12 +388,11 @@ pub fn migrate_existing_profiles(base_dir: &Path) -> Result<ProfilesIndex> {
             continue;
         }
 
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| DotAgentError::InvalidProfileName {
+        let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+            DotAgentError::InvalidProfileName {
                 name: path.display().to_string(),
-            })?;
+            }
+        })?;
 
         // Check if .dot-agent.toml exists
         if let Some(metadata) = ProfileMetadata::load(&path)? {
@@ -514,12 +511,8 @@ mod tests {
 
     #[test]
     fn profile_metadata_marketplace() {
-        let metadata = ProfileMetadata::new_marketplace(
-            "rust-lsp",
-            "claude-official",
-            "rust-lsp",
-            "1.0.0",
-        );
+        let metadata =
+            ProfileMetadata::new_marketplace("rust-lsp", "claude-official", "rust-lsp", "1.0.0");
 
         assert!(matches!(metadata.source, ProfileSource::Marketplace { .. }));
     }

@@ -194,12 +194,11 @@ impl PluginRegistrar {
             fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(settings).map_err(|e| {
-            DotAgentError::ConfigParse {
+        let content =
+            serde_json::to_string_pretty(settings).map_err(|e| DotAgentError::ConfigParse {
                 path: path.to_path_buf(),
                 message: e.to_string(),
-            }
-        })?;
+            })?;
 
         fs::write(path, content)?;
         Ok(())
@@ -212,24 +211,25 @@ impl PluginRegistrar {
             settings["plugins"] = serde_json::json!({});
         }
 
-        let plugins = settings["plugins"].as_object_mut().ok_or_else(|| {
-            DotAgentError::ConfigParse {
-                path: PathBuf::from("<settings>"),
-                message: "plugins must be an object".to_string(),
-            }
-        })?;
+        let plugins =
+            settings["plugins"]
+                .as_object_mut()
+                .ok_or_else(|| DotAgentError::ConfigParse {
+                    path: PathBuf::from("<settings>"),
+                    message: "plugins must be an object".to_string(),
+                })?;
 
         // Get or create installed array
         let installed = plugins
             .entry("installed")
             .or_insert_with(|| serde_json::json!([]));
 
-        let installed_arr = installed.as_array_mut().ok_or_else(|| {
-            DotAgentError::ConfigParse {
+        let installed_arr = installed
+            .as_array_mut()
+            .ok_or_else(|| DotAgentError::ConfigParse {
                 path: PathBuf::from("<settings>"),
                 message: "plugins.installed must be an array".to_string(),
-            }
-        })?;
+            })?;
 
         // Check if already installed
         let path_value = serde_json::json!(plugin_path);
@@ -269,7 +269,11 @@ impl PluginRegistrar {
     }
 
     /// List all registered plugins for a scope
-    pub fn list_plugins(&self, scope: PluginScope, target_dir: Option<&Path>) -> Result<Vec<String>> {
+    pub fn list_plugins(
+        &self,
+        scope: PluginScope,
+        target_dir: Option<&Path>,
+    ) -> Result<Vec<String>> {
         let settings_path = self.get_settings_path(scope, target_dir)?;
 
         if !settings_path.exists() {

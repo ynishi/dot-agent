@@ -456,7 +456,9 @@ fn parse_awesome_line(line: &str, _channel_name: &str) -> Option<(String, String
 }
 
 fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
-    use dot_agent_core::channel::{Channel, ChannelManager, ChannelRegistry, ChannelType, HubRegistry};
+    use dot_agent_core::channel::{
+        Channel, ChannelManager, ChannelRegistry, ChannelType, HubRegistry,
+    };
 
     let mut registry = ChannelRegistry::load(base_dir).unwrap_or_default();
 
@@ -533,10 +535,7 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
             } else if let Some(hub_name) = hub {
                 // From Hub
                 let channel_name = name.unwrap_or_else(|| source.clone());
-                (
-                    Channel::from_hub(&channel_name, &hub_name, &source),
-                    "hub",
-                )
+                (Channel::from_hub(&channel_name, &hub_name, &source), "hub")
             } else {
                 // Auto-detect (deprecated)
                 eprintln!(
@@ -556,7 +555,10 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                 if source.starts_with("http://") || source.starts_with("https://") {
                     // Guess based on URL
                     if source.contains("awesome") {
-                        (Channel::awesome_list(&channel_name, &source), "awesome (auto)")
+                        (
+                            Channel::awesome_list(&channel_name, &source),
+                            "awesome (auto)",
+                        )
                     } else {
                         (Channel::from_url(&channel_name, &source), "direct (auto)")
                     }
@@ -584,11 +586,12 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
         ChannelAction::List { name } => {
             if let Some(channel_name) = name {
                 // List importable profiles from a specific channel
-                let channel = registry.get(&channel_name).ok_or_else(|| {
-                    DotAgentError::ChannelNotFound {
-                        name: channel_name.clone(),
-                    }
-                })?;
+                let channel =
+                    registry
+                        .get(&channel_name)
+                        .ok_or_else(|| DotAgentError::ChannelNotFound {
+                            name: channel_name.clone(),
+                        })?;
 
                 println!();
                 println!(
@@ -602,8 +605,7 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                 match channel.channel_type {
                     ChannelType::Marketplace => {
                         let manager = ChannelManager::new(base_dir.to_path_buf())?;
-                        let cache_dir =
-                            ChannelRegistry::cache_dir(base_dir, &channel_name);
+                        let cache_dir = ChannelRegistry::cache_dir(base_dir, &channel_name);
                         let cache_file = cache_dir.join("marketplace.json");
 
                         // Auto-refresh if cache doesn't exist
@@ -613,9 +615,7 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                         }
 
                         if let Ok(content) = std::fs::read_to_string(&cache_file) {
-                            if let Ok(data) =
-                                serde_json::from_str::<serde_json::Value>(&content)
-                            {
+                            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
                                 if let Some(plugins) =
                                     data.get("plugins").and_then(|p| p.as_array())
                                 {
@@ -644,11 +644,7 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                                         }
                                     }
                                     println!();
-                                    println!(
-                                        "{} {}",
-                                        "Total:".dimmed(),
-                                        plugins.len()
-                                    );
+                                    println!("{} {}", "Total:".dimmed(), plugins.len());
                                 }
                             }
                         } else {
@@ -665,8 +661,7 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                         println!("{} 1", "Total:".dimmed());
                     }
                     ChannelType::AwesomeList => {
-                        let cache_dir =
-                            ChannelRegistry::cache_dir(base_dir, &channel_name);
+                        let cache_dir = ChannelRegistry::cache_dir(base_dir, &channel_name);
                         let cache_file = cache_dir.join("content.md");
 
                         if !cache_file.exists() {
@@ -678,9 +673,7 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                         if let Ok(content) = std::fs::read_to_string(&cache_file) {
                             let mut count = 0;
                             for line in content.lines() {
-                                if let Some(profile_ref) =
-                                    parse_awesome_line(line, &channel_name)
-                                {
+                                if let Some(profile_ref) = parse_awesome_line(line, &channel_name) {
                                     println!("  {}", profile_ref.0.cyan());
                                     if !profile_ref.1.is_empty() {
                                         println!("    {}", profile_ref.1.dimmed());
@@ -695,14 +688,8 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                         }
                     }
                     ChannelType::GitHubGlobal | ChannelType::Hub => {
-                        println!(
-                            "  {}",
-                            "List not supported for this channel type.".yellow()
-                        );
-                        println!(
-                            "  {}",
-                            "Use 'dot-agent search <query>' instead.".dimmed()
-                        );
+                        println!("  {}", "List not supported for this channel type.".yellow());
+                        println!("  {}", "Use 'dot-agent search <query>' instead.".dimmed());
                     }
                 }
             } else {
@@ -1053,8 +1040,7 @@ fn handle_install(
         parse_marketplace_ref(profile_name)
     {
         // Fetch and import plugin from marketplace
-        let profile =
-            import_marketplace_plugin(base_dir, &plugin, &marketplace, &manager, force)?;
+        let profile = import_marketplace_plugin(base_dir, &plugin, &marketplace, &manager, force)?;
         (profile.name.clone(), profile)
     } else {
         // Normal local profile
@@ -2571,7 +2557,10 @@ fn import_marketplace_plugin(
     if let Some(desc) = &plugin_info.description {
         println!("  Description: {}", desc);
     }
-    let version = plugin_info.version.clone().unwrap_or_else(|| "unknown".to_string());
+    let version = plugin_info
+        .version
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
     println!("  Version: {}", version);
 
     // Determine the source URL for the plugin

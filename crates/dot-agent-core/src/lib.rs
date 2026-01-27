@@ -17,8 +17,8 @@ pub use config::Config;
 pub use error::{DotAgentError, Result};
 pub use installer::{DiffResult, FileInfo, FileStatus, InstallResult, Installer};
 pub use metadata::Metadata;
-pub use profile::{IgnoreConfig, Profile, ProfileManager, DEFAULT_EXCLUDED_DIRS};
 pub use plugin_registrar::{PluginRegistrar, PluginRegistrationResult};
+pub use profile::{IgnoreConfig, Profile, ProfileManager, DEFAULT_EXCLUDED_DIRS};
 pub use profile_metadata::{
     migrate_existing_profiles, PluginConfig, PluginScope, ProfileIndexEntry, ProfileInfo,
     ProfileMetadata, ProfileSource, ProfilesIndex,
