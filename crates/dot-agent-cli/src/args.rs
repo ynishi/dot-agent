@@ -530,6 +530,10 @@ pub enum ProfileAction {
         /// Dry run (don't create new profile)
         #[arg(short, long)]
         dry_run: bool,
+
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Manage profile snapshots
@@ -691,6 +695,10 @@ pub enum RuleAction {
         /// Dry run (don't create new profile)
         #[arg(short, long)]
         dry_run: bool,
+
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Apply rule to installed files (alias for top-level 'apply')

@@ -1093,6 +1093,7 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
             rule,
             name,
             dry_run,
+            yes,
         } => {
             // Delegate to rule apply (creates new profile)
             handle_rule(
@@ -1101,6 +1102,7 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
                     rule,
                     name,
                     dry_run,
+                    yes,
                 },
                 base_dir,
             )?;
@@ -2357,39 +2359,81 @@ fn handle_rule(action: RuleAction, base_dir: &Path) -> Result<()> {
             rule,
             name,
             dry_run,
+            yes,
         } => {
             let source_profile = profile_manager.get_profile(&profile)?;
             let r = manager.get(&rule)?;
 
-            println!();
-            println!("Profile: {}", profile.cyan());
-            println!("Rule: {}", rule.cyan());
-            if dry_run {
-                println!("{}", "(dry run)".yellow());
-            }
-            println!();
+            // Calculate new profile name
+            let new_profile_name = name
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{}-{}", profile, rule));
 
-            let executor = RuleExecutor::new(&r, &profile_manager);
-            let result = executor.apply(&source_profile, name.as_deref(), dry_run)?;
+            // Display rich information
+            println!();
+            println!("{}", "Rule Apply".bold());
+            println!("{}", "─".repeat(50).dimmed());
+            println!("  Profile: {}", profile.cyan());
+            println!("  Rule:    {}", rule.cyan());
+            println!("  Output:  {}", new_profile_name.green());
+            println!("{}", "─".repeat(50).dimmed());
+            println!("  Contents: {}", source_profile.contents_summary());
+            println!("{}", "─".repeat(50).dimmed());
+            println!(
+                "  {}  This operation uses {} to generate",
+                "⚠️".yellow(),
+                "Claude CLI (LLM)".yellow().bold()
+            );
+            println!("     profile customizations.");
+            println!("{}", "─".repeat(50).dimmed());
 
             if dry_run {
+                println!();
+                println!("{}", "(dry run - no changes will be made)".yellow());
+                let executor = RuleExecutor::new(&r, &profile_manager);
+                let result = executor.apply(&source_profile, Some(&new_profile_name), true)?;
+                println!();
                 println!(
                     "Would create new profile: {}",
                     result.new_profile_name.green()
                 );
                 println!("  Path: {}", result.new_profile_path.display());
-            } else {
-                println!("{}", "Customization complete!".green());
-                println!();
-                println!("New profile created: {}", result.new_profile_name.cyan());
-                println!("  Path: {}", result.new_profile_path.display());
-                println!("  Files modified: {}", result.files_modified);
-                println!();
-                println!(
-                    "Install with: dot-agent install -p {}",
-                    result.new_profile_name
-                );
+                return Ok(());
             }
+
+            // Confirmation prompt (unless --yes)
+            if !yes {
+                println!();
+                print!("Proceed? [y/N]: ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            println!();
+            println!("{}", "Executing...".dimmed());
+
+            let executor = RuleExecutor::new(&r, &profile_manager);
+            let result = executor.apply(&source_profile, Some(&new_profile_name), false)?;
+
+            println!();
+            println!("{}", "✓ Customization complete!".green().bold());
+            println!();
+            println!("New profile created: {}", result.new_profile_name.cyan());
+            println!("  Path: {}", result.new_profile_path.display());
+            println!("  Files modified: {}", result.files_modified);
+            println!();
+            println!(
+                "Install with: {}",
+                format!("dot-agent install -p {}", result.new_profile_name).cyan()
+            );
         }
         RuleAction::ApplyInstalled {
             rule,
