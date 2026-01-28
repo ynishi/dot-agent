@@ -22,6 +22,9 @@ exclude = [".git"]
 # Default: []
 # Example: include = [".git"]  # to include .git in installations
 include = []
+
+# Default profile to use when none specified
+# default = "my-profile"
 "#;
 
 /// Global configuration
@@ -41,6 +44,10 @@ pub struct ProfileConfig {
     /// Directories to include (overrides exclude)
     #[serde(default)]
     pub include: Vec<String>,
+
+    /// Default profile name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 fn default_exclude() -> Vec<String> {
@@ -55,6 +62,7 @@ impl Default for ProfileConfig {
         Self {
             exclude: default_exclude(),
             include: Vec::new(),
+            default: None,
         }
     }
 }
@@ -112,6 +120,7 @@ impl Config {
         match key {
             "profile.exclude" => Some(format!("{:?}", self.profile.exclude)),
             "profile.include" => Some(format!("{:?}", self.profile.include)),
+            "profile.default" => self.profile.default.clone(),
             _ => None,
         }
     }
@@ -127,10 +136,24 @@ impl Config {
                 self.profile.include = parse_string_list(value)?;
                 Ok(())
             }
+            "profile.default" => {
+                let trimmed = value.trim();
+                self.profile.default = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
+                Ok(())
+            }
             _ => Err(DotAgentError::ConfigKeyNotFound {
                 key: key.to_string(),
             }),
         }
+    }
+
+    /// Clear the default profile
+    pub fn clear_default(&mut self) {
+        self.profile.default = None;
     }
 
     /// List all config keys with their current values
@@ -143,6 +166,13 @@ impl Config {
             (
                 "profile.include".to_string(),
                 format!("{:?}", self.profile.include),
+            ),
+            (
+                "profile.default".to_string(),
+                self.profile
+                    .default
+                    .clone()
+                    .unwrap_or_else(|| "(not set)".to_string()),
             ),
         ]
     }

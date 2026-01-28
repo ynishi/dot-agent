@@ -49,6 +49,17 @@ fn main() -> ExitCode {
     let base_dir = resolve_base_dir(cli.base_dir);
 
     let result = match cli.command {
+        // Top-level aliases
+        Some(Commands::List) => handle_profile(ProfileAction::List, &base_dir),
+        Some(Commands::Installed { path, global }) => {
+            handle_status(&base_dir, path.as_deref(), global)
+        }
+        Some(Commands::Default { profile, clear }) => handle_default(&base_dir, profile, clear),
+        Some(Commands::Outdated { path, global }) => {
+            handle_outdated(&base_dir, path.as_deref(), global)
+        }
+
+        // Core commands
         Some(Commands::Profile { action }) => handle_profile(action, &base_dir),
         Some(Commands::Config { action }) => handle_config(action, &base_dir),
         Some(Commands::Search {
@@ -1019,6 +1030,23 @@ fn handle_profile(action: ProfileAction, base_dir: &Path) -> Result<()> {
         } => {
             handle_import(&manager, &source, name, path, branch, force)?;
         }
+        ProfileAction::ApplyRule {
+            profile,
+            rule,
+            name,
+            dry_run,
+        } => {
+            // Delegate to rule apply (creates new profile)
+            handle_rule(
+                RuleAction::Apply {
+                    profile,
+                    rule,
+                    name,
+                    dry_run,
+                },
+                base_dir,
+            )?;
+        }
         ProfileAction::Snapshot { action } => {
             handle_profile_snapshot(action, base_dir, &manager)?;
         }
@@ -1597,6 +1625,165 @@ fn handle_status(base_dir: &Path, target: Option<&Path>, global: bool) -> Result
     Ok(())
 }
 
+fn handle_default(base_dir: &Path, profile: Option<String>, clear: bool) -> Result<()> {
+    let mut config = Config::load(base_dir)?;
+    let manager = ProfileManager::new(base_dir.to_path_buf());
+
+    if clear {
+        config.clear_default();
+        config.save(base_dir)?;
+        println!();
+        println!("{}", "Default profile cleared.".yellow());
+        return Ok(());
+    }
+
+    match profile {
+        Some(name) => {
+            // Verify profile exists
+            manager.get_profile(&name)?;
+
+            config.set("profile.default", &name)?;
+            config.save(base_dir)?;
+
+            println!();
+            println!("{} {}", "Default profile set:".green(), name.cyan());
+        }
+        None => {
+            // Show current default
+            println!();
+            match &config.profile.default {
+                Some(default) => {
+                    println!("Default profile: {}", default.cyan());
+                }
+                None => {
+                    println!("No default profile set.");
+                    println!();
+                    println!("Set with: dot-agent default <profile>");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_outdated(base_dir: &Path, target: Option<&Path>, global: bool) -> Result<()> {
+    let installer = Installer::new(base_dir.to_path_buf());
+    let manager = ProfileManager::new(base_dir.to_path_buf());
+    let target_dir = installer.resolve_target(target, global)?;
+
+    println!();
+    println!("Target: {}", target_dir.display());
+    println!();
+
+    if !target_dir.exists() {
+        println!("No installation found.");
+        return Ok(());
+    }
+
+    let metadata = Metadata::load(&target_dir)?;
+    let meta = match metadata {
+        Some(m) => m,
+        None => {
+            println!("No metadata found.");
+            return Ok(());
+        }
+    };
+
+    let mut outdated_count = 0;
+
+    println!("Installed profiles:");
+    println!();
+
+    for profile_name in &meta.installed.profiles {
+        // Get current profile
+        let profile = match manager.get_profile(profile_name) {
+            Ok(p) => p,
+            Err(_) => {
+                // Profile no longer exists locally
+                println!(
+                    "  {} {}",
+                    profile_name.yellow(),
+                    "(profile not found locally)".red()
+                );
+                continue;
+            }
+        };
+
+        // Get profile version from metadata
+        let current_version = profile
+            .metadata()
+            .ok()
+            .flatten()
+            .and_then(|m| m.profile.version.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Check if any installed files differ from source
+        let prefix = format!("{}:", profile_name);
+        let installed_files: Vec<_> = meta
+            .files
+            .keys()
+            .filter(|f| f.starts_with(&prefix))
+            .collect();
+
+        let mut has_changes = false;
+        for tracked_file in &installed_files {
+            // Extract actual filename (after profile: prefix)
+            let actual_filename = tracked_file.strip_prefix(&prefix).unwrap_or(tracked_file);
+            let installed_path = target_dir.join(actual_filename);
+            let source_path = profile.path.join(actual_filename);
+
+            if source_path.exists() && installed_path.exists() {
+                // Compare file hashes
+                if let (Ok(installed_content), Ok(source_content)) = (
+                    std::fs::read_to_string(&installed_path),
+                    std::fs::read_to_string(&source_path),
+                ) {
+                    if installed_content != source_content {
+                        has_changes = true;
+                        break;
+                    }
+                }
+            } else if source_path.exists() != installed_path.exists() {
+                has_changes = true;
+                break;
+            }
+        }
+
+        if has_changes {
+            println!(
+                "  {} v{} {}",
+                profile_name.cyan(),
+                current_version,
+                "[updates available]".yellow()
+            );
+            outdated_count += 1;
+        } else {
+            println!(
+                "  {} v{} {}",
+                profile_name.cyan(),
+                current_version,
+                "[up to date]".green()
+            );
+        }
+    }
+
+    println!();
+
+    if outdated_count == 0 {
+        println!("{}", "All profiles are up to date.".green());
+    } else {
+        println!(
+            "{} profile(s) can be upgraded.",
+            outdated_count.to_string().yellow()
+        );
+        println!();
+        println!("Upgrade with: dot-agent upgrade <profile>");
+    }
+
+    Ok(())
+}
+
 fn handle_import(
     manager: &ProfileManager,
     source: &str,
@@ -2145,6 +2332,15 @@ fn handle_rule(action: RuleAction, base_dir: &Path) -> Result<()> {
                     result.new_profile_name
                 );
             }
+        }
+        RuleAction::ApplyInstalled {
+            rule,
+            profile,
+            path,
+            force,
+        } => {
+            // Delegate to top-level apply (applies to installed files)
+            handle_apply(base_dir, &rule, profile.as_deref(), path.as_deref(), force)?;
         }
     }
 

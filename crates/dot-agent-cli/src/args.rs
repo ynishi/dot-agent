@@ -39,6 +39,48 @@ pub enum Shell {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    // =========================================================================
+    // Top-level aliases (convenience shortcuts)
+    // =========================================================================
+    /// List all profiles (alias for 'profile list')
+    #[command(visible_alias = "ls")]
+    List,
+
+    /// Show installed profiles (alias for 'status')
+    Installed {
+        /// Base directory (installs to <path>/.claude, default: current dir)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Use ~/.claude directly (ignores --path)
+        #[arg(short, long)]
+        global: bool,
+    },
+
+    /// Set or show default profile
+    Default {
+        /// Profile name to set as default (omit to show current)
+        profile: Option<String>,
+
+        /// Clear the default profile
+        #[arg(long)]
+        clear: bool,
+    },
+
+    /// Show profiles with available updates
+    Outdated {
+        /// Base directory (installs to <path>/.claude, default: current dir)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Use ~/.claude directly (ignores --path)
+        #[arg(short, long)]
+        global: bool,
+    },
+
+    // =========================================================================
+    // Core commands
+    // =========================================================================
     /// Manage profiles
     Profile {
         #[command(subcommand)]
@@ -113,11 +155,11 @@ pub enum Commands {
         /// Profile name to install
         profile: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory for installation (installs to <path>/.claude)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Install to ~/.claude (global)
+        /// Install to ~/.claude directly (global installation)
         #[arg(short, long)]
         global: bool,
 
@@ -151,11 +193,11 @@ pub enum Commands {
         /// Profile name to upgrade
         profile: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Upgrade ~/.claude (global)
+        /// Upgrade ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
 
@@ -189,11 +231,11 @@ pub enum Commands {
         /// Profile name to diff
         profile: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Diff ~/.claude (global)
+        /// Diff ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
 
@@ -211,11 +253,11 @@ pub enum Commands {
         /// Profile name to remove
         profile: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Remove from ~/.claude (global)
+        /// Remove from ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
 
@@ -242,11 +284,11 @@ pub enum Commands {
 
     /// Show installation status
     Status {
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Check ~/.claude (global)
+        /// Use ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
     },
@@ -273,7 +315,7 @@ pub enum Commands {
         #[arg(short, long)]
         profile: Option<String>,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
@@ -299,11 +341,11 @@ pub enum Commands {
         /// Profile name to switch to
         profile: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Switch ~/.claude (global)
+        /// Switch ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
 
@@ -325,22 +367,22 @@ pub enum SnapshotAction {
         #[arg(short, long)]
         message: Option<String>,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Snapshot ~/.claude (global)
+        /// Snapshot ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
     },
 
     /// List all snapshots
     List {
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// List for ~/.claude (global)
+        /// List for ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
     },
@@ -350,11 +392,11 @@ pub enum SnapshotAction {
         /// Snapshot ID to restore
         id: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Restore to ~/.claude (global)
+        /// Restore to ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
 
@@ -368,11 +410,11 @@ pub enum SnapshotAction {
         /// Snapshot ID to compare
         id: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Diff for ~/.claude (global)
+        /// Diff for ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
     },
@@ -382,11 +424,11 @@ pub enum SnapshotAction {
         /// Snapshot ID to delete
         id: String,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Delete for ~/.claude (global)
+        /// Delete for ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
 
@@ -401,11 +443,11 @@ pub enum SnapshotAction {
         #[arg(short, long, default_value = "10")]
         keep: usize,
 
-        /// Target directory (default: current directory's .claude)
+        /// Base directory (installs to <path>/.claude, default: current dir)
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Prune for ~/.claude (global)
+        /// Prune for ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
 
@@ -466,6 +508,24 @@ pub enum ProfileAction {
         /// Force overwrite if profile exists
         #[arg(short, long)]
         force: bool,
+    },
+
+    /// Apply rule to profile, creating new customized profile (alias for 'rule apply')
+    ApplyRule {
+        /// Source profile name
+        profile: String,
+
+        /// Rule name to apply
+        #[arg(short, long)]
+        rule: String,
+
+        /// Name for the new profile (default: {profile}-{rule})
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Dry run (don't create new profile)
+        #[arg(short, long)]
+        dry_run: bool,
     },
 
     /// Manage profile snapshots
@@ -627,6 +687,25 @@ pub enum RuleAction {
         /// Dry run (don't create new profile)
         #[arg(short, long)]
         dry_run: bool,
+    },
+
+    /// Apply rule to installed files (alias for top-level 'apply')
+    #[command(name = "apply-installed")]
+    ApplyInstalled {
+        /// Rule name to apply
+        rule: String,
+
+        /// Apply only to files from this installed profile
+        #[arg(short, long)]
+        profile: Option<String>,
+
+        /// Base directory (installs to <path>/.claude, default: current dir)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Apply without confirmation
+        #[arg(short, long)]
+        force: bool,
     },
 }
 
