@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use dot_agent_core::installer::{InstallOptions, Installer};
-use dot_agent_core::profile::ProfileManager;
+use dot_agent_core::profile::{IgnoreConfig, ProfileManager};
 use dot_agent_core::rule::RuleManager;
 use dot_agent_core::{DotAgentError, Result};
 
@@ -51,6 +51,16 @@ struct DotAgentApp {
     apply_profile: Option<String>,
     new_profile_name: String,
 
+    // Dialog state - Profile
+    show_create_profile_dialog: bool,
+    create_profile_name: String,
+    show_delete_profile_confirm: bool,
+
+    // Dialog state - Rule
+    show_create_rule_dialog: bool,
+    create_rule_name: String,
+    show_delete_rule_confirm: bool,
+
     // Status
     status_message: Option<(String, MessageType)>,
 }
@@ -83,6 +93,12 @@ impl DotAgentApp {
             force: false,
             apply_profile: None,
             new_profile_name: String::new(),
+            show_create_profile_dialog: false,
+            create_profile_name: String::new(),
+            show_delete_profile_confirm: false,
+            show_create_rule_dialog: false,
+            create_rule_name: String::new(),
+            show_delete_rule_confirm: false,
             status_message: None,
         }
     }
@@ -95,6 +111,12 @@ impl DotAgentApp {
 
 impl eframe::App for DotAgentApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Render dialogs first (modal)
+        self.render_create_profile_dialog(ctx);
+        self.render_delete_profile_confirm(ctx);
+        self.render_create_rule_dialog(ctx);
+        self.render_delete_rule_confirm(ctx);
+
         // Top panel - header
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.add_space(8.0);
@@ -163,13 +185,17 @@ impl eframe::App for DotAgentApp {
 
 impl DotAgentApp {
     fn render_profiles_list(&mut self, ui: &mut egui::Ui) {
+        // Add button at top
+        if ui.button("+ Add Profile").clicked() {
+            self.show_create_profile_dialog = true;
+            self.create_profile_name.clear();
+        }
+        ui.add_space(8.0);
+
         match self.profile_manager.list_profiles() {
             Ok(profiles) => {
                 if profiles.is_empty() {
                     ui.label("No profiles found");
-                    ui.add_space(8.0);
-                    ui.label("Create with CLI:");
-                    ui.code("dot-agent profile add <name>");
                 } else {
                     for profile in profiles {
                         let selected = self.selected_profile.as_ref() == Some(&profile.name);
@@ -186,13 +212,17 @@ impl DotAgentApp {
     }
 
     fn render_rules_list(&mut self, ui: &mut egui::Ui) {
+        // Add button at top
+        if ui.button("+ Add Rule").clicked() {
+            self.show_create_rule_dialog = true;
+            self.create_rule_name.clear();
+        }
+        ui.add_space(8.0);
+
         match self.rule_manager.list() {
             Ok(rules) => {
                 if rules.is_empty() {
                     ui.label("No rules found");
-                    ui.add_space(8.0);
-                    ui.label("Create with CLI:");
-                    ui.code("dot-agent rule add <name>");
                 } else {
                     for rule in rules {
                         let selected = self.selected_rule.as_ref() == Some(&rule.name);
@@ -268,8 +298,34 @@ impl DotAgentApp {
                             self.do_install(&profile);
                         }
 
+                        if ui.button("⬆ Upgrade").clicked() {
+                            self.do_upgrade(&profile);
+                        }
+
                         if ui.button("📊 Diff").clicked() {
                             self.do_diff(&profile);
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("🗑 Remove Installed").clicked() {
+                            self.do_remove_installed(&profile);
+                        }
+                    });
+
+                    // Danger zone - delete profile
+                    ui.add_space(24.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Danger Zone:");
+                        if ui
+                            .button("🗑 Delete Profile")
+                            .on_hover_text("Permanently delete this profile")
+                            .clicked()
+                        {
+                            self.show_delete_profile_confirm = true;
                         }
                     });
                 }
@@ -352,6 +408,21 @@ impl DotAgentApp {
                     if !can_apply {
                         ui.label("Select a source profile and enter a name for the new profile");
                     }
+
+                    // Danger zone - delete rule
+                    ui.add_space(24.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Danger Zone:");
+                        if ui
+                            .button("🗑 Delete Rule")
+                            .on_hover_text("Permanently delete this rule")
+                            .clicked()
+                        {
+                            self.show_delete_rule_confirm = true;
+                        }
+                    });
                 }
                 Err(e) => {
                     ui.colored_label(egui::Color32::RED, format!("Error loading rule: {e}"));
@@ -368,6 +439,170 @@ impl DotAgentApp {
             ui.heading(message);
         });
     }
+
+    // =========================================================================
+    // Dialogs
+    // =========================================================================
+
+    fn render_create_profile_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_create_profile_dialog {
+            return;
+        }
+
+        let mut open = true;
+        egui::Window::new("Create Profile")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.create_profile_name);
+                });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let can_create = !self.create_profile_name.is_empty();
+                    if ui
+                        .add_enabled(can_create, egui::Button::new("Create"))
+                        .clicked()
+                    {
+                        self.do_create_profile();
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_create_profile_dialog = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_create_profile_dialog = false;
+        }
+    }
+
+    fn render_delete_profile_confirm(&mut self, ctx: &egui::Context) {
+        if !self.show_delete_profile_confirm {
+            return;
+        }
+
+        let profile_name = match &self.selected_profile {
+            Some(name) => name.clone(),
+            None => {
+                self.show_delete_profile_confirm = false;
+                return;
+            }
+        };
+
+        let mut open = true;
+        egui::Window::new("Confirm Delete")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Are you sure you want to delete profile '{}'?",
+                    profile_name
+                ));
+                ui.colored_label(egui::Color32::RED, "This action cannot be undone.");
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        self.do_delete_profile(&profile_name);
+                        self.show_delete_profile_confirm = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_delete_profile_confirm = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_delete_profile_confirm = false;
+        }
+    }
+
+    fn render_create_rule_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_create_rule_dialog {
+            return;
+        }
+
+        let mut open = true;
+        egui::Window::new("Create Rule")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.create_rule_name);
+                });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let can_create = !self.create_rule_name.is_empty();
+                    if ui
+                        .add_enabled(can_create, egui::Button::new("Create"))
+                        .clicked()
+                    {
+                        self.do_create_rule();
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_create_rule_dialog = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_create_rule_dialog = false;
+        }
+    }
+
+    fn render_delete_rule_confirm(&mut self, ctx: &egui::Context) {
+        if !self.show_delete_rule_confirm {
+            return;
+        }
+
+        let rule_name = match &self.selected_rule {
+            Some(name) => name.clone(),
+            None => {
+                self.show_delete_rule_confirm = false;
+                return;
+            }
+        };
+
+        let mut open = true;
+        egui::Window::new("Confirm Delete")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Are you sure you want to delete rule '{}'?",
+                    rule_name
+                ));
+                ui.colored_label(egui::Color32::RED, "This action cannot be undone.");
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        self.do_delete_rule(&rule_name);
+                        self.show_delete_rule_confirm = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_delete_rule_confirm = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_delete_rule_confirm = false;
+        }
+    }
+
+    // =========================================================================
+    // Actions
+    // =========================================================================
 
     fn do_install(&mut self, profile: &dot_agent_core::Profile) {
         let installer = Installer::new(self.base_dir.clone());
@@ -386,7 +621,7 @@ impl DotAgentApp {
                     Ok(result) => {
                         self.status_message = Some((
                             format!(
-                                "✓ Installed {} files to {}",
+                                "Installed {} files to {}",
                                 result.installed,
                                 target_dir.display()
                             ),
@@ -405,6 +640,41 @@ impl DotAgentApp {
         }
     }
 
+    fn do_upgrade(&mut self, profile: &dot_agent_core::Profile) {
+        let installer = Installer::new(self.base_dir.clone());
+        let target = if self.install_global || self.target_path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(&self.target_path))
+        };
+
+        match installer.resolve_target(target.as_deref(), self.install_global) {
+            Ok(target_dir) => {
+                let opts = InstallOptions::new()
+                    .force(self.force)
+                    .no_prefix(self.no_prefix);
+                match installer.upgrade(profile, &target_dir, &opts) {
+                    Ok((updated, new, skipped, unchanged)) => {
+                        self.status_message = Some((
+                            format!(
+                                "Upgraded: {} updated, {} new, {} skipped, {} unchanged",
+                                updated, new, skipped, unchanged
+                            ),
+                            MessageType::Success,
+                        ));
+                    }
+                    Err(e) => {
+                        self.status_message =
+                            Some((format!("Upgrade failed: {e}"), MessageType::Error));
+                    }
+                }
+            }
+            Err(e) => {
+                self.status_message = Some((format!("Invalid target: {e}"), MessageType::Error));
+            }
+        }
+    }
+
     fn do_diff(&mut self, profile: &dot_agent_core::Profile) {
         let installer = Installer::new(self.base_dir.clone());
         let target = if self.install_global || self.target_path.is_empty() {
@@ -414,20 +684,56 @@ impl DotAgentApp {
         };
 
         match installer.resolve_target(target.as_deref(), self.install_global) {
-            Ok(target_dir) => match installer.diff(profile, &target_dir) {
-                Ok(result) => {
-                    self.status_message = Some((
-                        format!(
-                            "Modified: {}, Missing: {}, Unchanged: {}",
-                            result.modified, result.missing, result.unchanged
-                        ),
-                        MessageType::Info,
-                    ));
+            Ok(target_dir) => {
+                match installer.diff(profile, &target_dir, &IgnoreConfig::with_defaults()) {
+                    Ok(result) => {
+                        self.status_message = Some((
+                            format!(
+                                "Modified: {}, Missing: {}, Unchanged: {}",
+                                result.modified, result.missing, result.unchanged
+                            ),
+                            MessageType::Info,
+                        ));
+                    }
+                    Err(e) => {
+                        self.status_message =
+                            Some((format!("Diff failed: {e}"), MessageType::Error));
+                    }
                 }
-                Err(e) => {
-                    self.status_message = Some((format!("Diff failed: {e}"), MessageType::Error));
+            }
+            Err(e) => {
+                self.status_message = Some((format!("Invalid target: {e}"), MessageType::Error));
+            }
+        }
+    }
+
+    fn do_remove_installed(&mut self, profile: &dot_agent_core::Profile) {
+        let installer = Installer::new(self.base_dir.clone());
+        let target = if self.install_global || self.target_path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(&self.target_path))
+        };
+
+        match installer.resolve_target(target.as_deref(), self.install_global) {
+            Ok(target_dir) => {
+                let opts = InstallOptions::new().force(self.force);
+                match installer.remove(profile, &target_dir, &opts) {
+                    Ok((removed, kept, unmerged)) => {
+                        self.status_message = Some((
+                            format!(
+                                "Removed {} files, kept {}, unmerged {}",
+                                removed, kept, unmerged
+                            ),
+                            MessageType::Success,
+                        ));
+                    }
+                    Err(e) => {
+                        self.status_message =
+                            Some((format!("Remove failed: {e}"), MessageType::Error));
+                    }
                 }
-            },
+            }
             Err(e) => {
                 self.status_message = Some((format!("Invalid target: {e}"), MessageType::Error));
             }
@@ -469,7 +775,7 @@ impl DotAgentApp {
             Ok(result) => {
                 self.status_message = Some((
                     format!(
-                        "✓ Created profile '{}' ({} files modified)",
+                        "Created profile '{}' ({} files modified)",
                         result.new_profile_name, result.files_modified
                     ),
                     MessageType::Success,
@@ -479,6 +785,85 @@ impl DotAgentApp {
             }
             Err(e) => {
                 self.status_message = Some((format!("Apply failed: {e}"), MessageType::Error));
+            }
+        }
+    }
+
+    fn do_create_profile(&mut self) {
+        let name = self.create_profile_name.trim();
+        if name.is_empty() {
+            self.status_message =
+                Some(("Profile name is required".to_string(), MessageType::Error));
+            return;
+        }
+
+        match self.profile_manager.create_profile(name) {
+            Ok(profile) => {
+                self.status_message = Some((
+                    format!("Created profile '{}'", profile.name),
+                    MessageType::Success,
+                ));
+                self.selected_profile = Some(profile.name);
+                self.show_create_profile_dialog = false;
+                self.refresh();
+            }
+            Err(e) => {
+                self.status_message =
+                    Some((format!("Failed to create profile: {e}"), MessageType::Error));
+            }
+        }
+    }
+
+    fn do_delete_profile(&mut self, name: &str) {
+        match self.profile_manager.remove_profile(name) {
+            Ok(()) => {
+                self.status_message =
+                    Some((format!("Deleted profile '{}'", name), MessageType::Success));
+                self.selected_profile = None;
+                self.refresh();
+            }
+            Err(e) => {
+                self.status_message =
+                    Some((format!("Failed to delete profile: {e}"), MessageType::Error));
+            }
+        }
+    }
+
+    fn do_create_rule(&mut self) {
+        let name = self.create_rule_name.trim();
+        if name.is_empty() {
+            self.status_message = Some(("Rule name is required".to_string(), MessageType::Error));
+            return;
+        }
+
+        match self.rule_manager.create(name) {
+            Ok(rule) => {
+                self.status_message = Some((
+                    format!("Created rule '{}'", rule.name),
+                    MessageType::Success,
+                ));
+                self.selected_rule = Some(rule.name);
+                self.show_create_rule_dialog = false;
+                self.refresh();
+            }
+            Err(e) => {
+                self.status_message =
+                    Some((format!("Failed to create rule: {e}"), MessageType::Error));
+            }
+        }
+    }
+
+    fn do_delete_rule(&mut self, name: &str) {
+        match self.rule_manager.remove(name) {
+            Ok(()) => {
+                self.status_message =
+                    Some((format!("Deleted rule '{}'", name), MessageType::Success));
+                self.selected_rule = None;
+                self.refresh();
+            }
+            Err(e) => {
+                self.status_message =
+                    Some((format!("Failed to delete rule: {e}"), MessageType::Error));
             }
         }
     }
