@@ -148,6 +148,10 @@ pub enum Commands {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: Shell,
+
+        /// Install completions to ~/.dot-agent/completions/ (non-destructive)
+        #[arg(long)]
+        install: bool,
     },
 
     /// Install a profile to current directory (or --path target)

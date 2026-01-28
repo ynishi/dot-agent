@@ -77,9 +77,8 @@ fn main() -> ExitCode {
         ),
         Some(Commands::Hub { action }) => handle_hub(action, &base_dir),
         Some(Commands::Channel { action }) => handle_channel(action, &base_dir),
-        Some(Commands::Completions { shell }) => {
-            handle_completions(shell);
-            Ok(())
+        Some(Commands::Completions { shell, install }) => {
+            handle_completions(shell, install, &base_dir)
         }
         Some(Commands::Install {
             profile,
@@ -200,16 +199,75 @@ fn main() -> ExitCode {
     }
 }
 
-fn handle_completions(shell: Shell) {
+fn handle_completions(shell: Shell, install: bool, base_dir: &Path) -> Result<()> {
     let mut cmd = Cli::command();
-    let shell = match shell {
+    let clap_shell = match shell {
         Shell::Bash => clap_complete::Shell::Bash,
         Shell::Zsh => clap_complete::Shell::Zsh,
         Shell::Fish => clap_complete::Shell::Fish,
         Shell::PowerShell => clap_complete::Shell::PowerShell,
         Shell::Elvish => clap_complete::Shell::Elvish,
     };
-    generate(shell, &mut cmd, "dot-agent", &mut io::stdout());
+
+    if install {
+        let completions_dir = base_dir.join("completions");
+        std::fs::create_dir_all(&completions_dir)?;
+
+        let (filename, setup_instructions) = match shell {
+            Shell::Zsh => (
+                "_dot-agent",
+                format!(
+                    r#"# Add to ~/.zshrc (before compinit):
+fpath=({} $fpath)
+autoload -Uz compinit && compinit
+
+# Then reload:
+rm -f ~/.zcompdump* && exec zsh"#,
+                    completions_dir.display()
+                ),
+            ),
+            Shell::Bash => (
+                "dot-agent.bash",
+                format!(
+                    "# Add to ~/.bashrc:\nsource {}",
+                    completions_dir.join("dot-agent.bash").display()
+                ),
+            ),
+            Shell::Fish => (
+                "dot-agent.fish",
+                format!(
+                    "# Copy to fish completions:\ncp {} ~/.config/fish/completions/",
+                    completions_dir.join("dot-agent.fish").display()
+                ),
+            ),
+            Shell::PowerShell => (
+                "_dot-agent.ps1",
+                format!(
+                    "# Add to $PROFILE:\n. {}",
+                    completions_dir.join("_dot-agent.ps1").display()
+                ),
+            ),
+            Shell::Elvish => (
+                "dot-agent.elv",
+                format!(
+                    "# Add to ~/.elvish/rc.elv:\neval (slurp < {})",
+                    completions_dir.join("dot-agent.elv").display()
+                ),
+            ),
+        };
+
+        let output_path = completions_dir.join(filename);
+        let mut file = std::fs::File::create(&output_path)?;
+        generate(clap_shell, &mut cmd, "dot-agent", &mut file);
+
+        println!("{} {}", "Installed:".green(), output_path.display());
+        println!();
+        println!("{}", setup_instructions);
+    } else {
+        generate(clap_shell, &mut cmd, "dot-agent", &mut io::stdout());
+    }
+
+    Ok(())
 }
 
 fn resolve_base_dir(cli_base: Option<PathBuf>) -> PathBuf {
