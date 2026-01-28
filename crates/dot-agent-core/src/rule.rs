@@ -280,6 +280,17 @@ Only output file changes. No explanations needed.
         new_name: Option<&str>,
         dry_run: bool,
     ) -> Result<ApplyResult> {
+        self.apply_with_retries(profile, new_name, dry_run, 3)
+    }
+
+    /// Apply the rule with validation and automatic retries.
+    pub fn apply_with_retries(
+        &self,
+        profile: &Profile,
+        new_name: Option<&str>,
+        dry_run: bool,
+        max_retries: usize,
+    ) -> Result<ApplyResult> {
         if !check_claude_cli() {
             return Err(DotAgentError::ClaudeNotFound);
         }
@@ -304,18 +315,44 @@ Only output file changes. No explanations needed.
             self.profile_manager
                 .import_profile(&profile.path, &new_profile_name, false)?;
 
-        // Generate prompt and execute AI
+        // Generate prompt and execute AI with retry on validation failure
         let prompt = self.generate_prompt(profile)?;
-        let output = execute_claude(&new_profile.path, &prompt)?;
+        let mut last_error = None;
 
-        // Apply changes
-        let files_modified = apply_ai_output(&new_profile.path, &output)?;
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                eprintln!(
+                    "Validation failed, retrying... (attempt {}/{})",
+                    attempt + 1,
+                    max_retries + 1
+                );
+            }
 
-        Ok(ApplyResult {
-            new_profile_name,
-            new_profile_path: new_profile.path,
-            files_modified,
-        })
+            let output = execute_claude(&new_profile.path, &prompt)?;
+            let files_modified = apply_ai_output(&new_profile.path, &output)?;
+
+            // Validate the generated profile
+            match validate_profile(&new_profile.path) {
+                Ok(()) => {
+                    return Ok(ApplyResult {
+                        new_profile_name,
+                        new_profile_path: new_profile.path,
+                        files_modified,
+                    });
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    // Continue to retry
+                }
+            }
+        }
+
+        // All retries exhausted
+        Err(
+            last_error.unwrap_or_else(|| DotAgentError::ClaudeExecutionFailed {
+                message: "Validation failed after all retries".to_string(),
+            }),
+        )
     }
 }
 
@@ -482,6 +519,26 @@ fn parse_name_from_output(output: &str) -> Result<(String, String)> {
 // Helpers
 // ============================================================================
 
+/// Validate a profile by checking all TOML files can be parsed.
+fn validate_profile(profile_path: &Path) -> Result<()> {
+    for entry in walkdir::WalkDir::new(profile_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+    {
+        let path = entry.path();
+        let content = fs::read_to_string(path)?;
+        if let Err(e) = content.parse::<toml::Table>() {
+            return Err(DotAgentError::TomlError {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn check_claude_cli() -> bool {
     Command::new("claude")
         .arg("--version")
@@ -555,7 +612,12 @@ fn apply_ai_output(profile_path: &Path, output: &str) -> Result<usize> {
                 if line.starts_with("ACTION:") {
                     break;
                 }
-                content.push_str(lines.next().unwrap_or(""));
+                let line = lines.next().unwrap_or("");
+                // Skip markdown code block markers
+                if line.trim().starts_with("```") {
+                    continue;
+                }
+                content.push_str(line);
                 content.push('\n');
             }
 
