@@ -4,6 +4,7 @@ pub mod error;
 pub mod installer;
 pub mod json_merge;
 pub mod metadata;
+pub mod platform;
 pub mod plugin_manifest;
 pub mod plugin_registrar;
 pub mod profile;
@@ -23,6 +24,7 @@ pub use json_merge::{
     MergeResult, UnmergeResult,
 };
 pub use metadata::Metadata;
+pub use platform::{InstallTarget, Platform};
 pub use plugin_manifest::{FilterConfig, PluginManifest, DEFAULT_COMPONENT_DIRS};
 pub use plugin_registrar::{PluginRegistrar, PluginRegistrationResult};
 pub use profile::{IgnoreConfig, Profile, ProfileManager, DEFAULT_EXCLUDED_DIRS};

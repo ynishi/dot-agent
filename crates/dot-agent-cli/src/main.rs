@@ -10,6 +10,7 @@ use dot_agent_core::channel::ChannelManager;
 use dot_agent_core::config::Config;
 use dot_agent_core::installer::{FileStatus, InstallOptions, Installer};
 use dot_agent_core::metadata::Metadata;
+use dot_agent_core::platform::InstallTarget;
 use dot_agent_core::profile::{IgnoreConfig, ProfileManager};
 use dot_agent_core::{DotAgentError, Result};
 
@@ -52,7 +53,7 @@ fn main() -> ExitCode {
         // Top-level aliases
         Some(Commands::List) => handle_profile(ProfileAction::List, &base_dir),
         Some(Commands::Installed { path, global }) => {
-            handle_status(&base_dir, path.as_deref(), global)
+            handle_status(&base_dir, path.as_deref(), global, InstallTarget::default())
         }
         Some(Commands::Default { profile, clear }) => handle_default(&base_dir, profile, clear),
         Some(Commands::Outdated { path, global }) => {
@@ -84,78 +85,113 @@ fn main() -> ExitCode {
             profile,
             path,
             global,
+            codex,
+            claude,
+            all,
             force,
             dry_run,
             no_prefix,
             no_merge,
             include,
             exclude,
-        }) => handle_install(
-            &base_dir,
-            &profile,
-            path.as_deref(),
-            global,
-            force,
-            dry_run,
-            no_prefix,
-            no_merge,
-            build_ignore_config(&base_dir, &include, &exclude),
-        ),
+        }) => {
+            let target = resolve_install_target(codex, claude, all, path.as_deref());
+            handle_install(
+                &base_dir,
+                &profile,
+                path.as_deref(),
+                global,
+                force,
+                dry_run,
+                no_prefix,
+                no_merge,
+                build_ignore_config(&base_dir, &include, &exclude),
+                target,
+            )
+        }
         Some(Commands::Upgrade {
             profile,
             path,
             global,
+            codex,
+            claude,
+            all,
             force,
             dry_run,
             no_prefix,
             no_merge,
             include,
             exclude,
-        }) => handle_upgrade(
-            &base_dir,
-            &profile,
-            path.as_deref(),
-            global,
-            force,
-            dry_run,
-            no_prefix,
-            no_merge,
-            build_ignore_config(&base_dir, &include, &exclude),
-        ),
+        }) => {
+            let target = resolve_install_target(codex, claude, all, path.as_deref());
+            handle_upgrade(
+                &base_dir,
+                &profile,
+                path.as_deref(),
+                global,
+                force,
+                dry_run,
+                no_prefix,
+                no_merge,
+                build_ignore_config(&base_dir, &include, &exclude),
+                target,
+            )
+        }
         Some(Commands::Diff {
             profile,
             path,
             global,
+            codex,
+            claude,
+            all,
             include,
             exclude,
-        }) => handle_diff(
-            &base_dir,
-            &profile,
-            path.as_deref(),
-            global,
-            build_ignore_config(&base_dir, &include, &exclude),
-        ),
+        }) => {
+            let target = resolve_install_target(codex, claude, all, path.as_deref());
+            handle_diff(
+                &base_dir,
+                &profile,
+                path.as_deref(),
+                global,
+                build_ignore_config(&base_dir, &include, &exclude),
+                target,
+            )
+        }
         Some(Commands::Remove {
             profile,
             path,
             global,
+            codex,
+            claude,
+            all,
             force,
             dry_run,
             no_merge,
             include,
             exclude,
-        }) => handle_remove(
-            &base_dir,
-            &profile,
-            path.as_deref(),
+        }) => {
+            let target = resolve_install_target(codex, claude, all, path.as_deref());
+            handle_remove(
+                &base_dir,
+                &profile,
+                path.as_deref(),
+                global,
+                force,
+                dry_run,
+                no_merge,
+                build_ignore_config(&base_dir, &include, &exclude),
+                target,
+            )
+        }
+        Some(Commands::Status {
+            path,
             global,
-            force,
-            dry_run,
-            no_merge,
-            build_ignore_config(&base_dir, &include, &exclude),
-        ),
-        Some(Commands::Status { path, global }) => {
-            handle_status(&base_dir, path.as_deref(), global)
+            codex,
+            claude,
+            all,
+        }) => {
+            let target = resolve_install_target(codex, claude, all, path.as_deref());
+            handle_status(&base_dir, path.as_deref(), global, target)
         }
         Some(Commands::Copy {
             source,
@@ -174,16 +210,23 @@ fn main() -> ExitCode {
             profile,
             path,
             global,
+            codex,
+            claude,
+            all,
             no_snapshot,
             force,
-        }) => handle_switch(
-            &base_dir,
-            &profile,
-            path.as_deref(),
-            global,
-            no_snapshot,
-            force,
-        ),
+        }) => {
+            let target = resolve_install_target(codex, claude, all, path.as_deref());
+            handle_switch(
+                &base_dir,
+                &profile,
+                path.as_deref(),
+                global,
+                no_snapshot,
+                force,
+                target,
+            )
+        }
         None => {
             Cli::command().print_help().ok();
             Ok(())
@@ -268,6 +311,26 @@ rm -f ~/.zcompdump* && exec zsh"#,
     }
 
     Ok(())
+}
+
+/// Resolve InstallTarget from CLI flags
+fn resolve_install_target(
+    codex: bool,
+    _claude: bool, // Explicit flag for clarity, but Claude is the default
+    all: bool,
+    path: Option<&Path>,
+) -> InstallTarget {
+    if let Some(p) = path {
+        return InstallTarget::custom(p.to_path_buf());
+    }
+    if all {
+        InstallTarget::all()
+    } else if codex {
+        InstallTarget::codex()
+    } else {
+        // Default to Claude (claude flag or no flag)
+        InstallTarget::claude()
+    }
 }
 
 fn resolve_base_dir(cli_base: Option<PathBuf>) -> PathBuf {
@@ -1126,7 +1189,10 @@ fn handle_install(
     no_prefix: bool,
     no_merge: bool,
     ignore_config: IgnoreConfig,
+    install_target: InstallTarget,
 ) -> Result<()> {
+    use dot_agent_core::platform::Platform;
+
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
 
@@ -1143,11 +1209,34 @@ fn handle_install(
         (profile_name.to_string(), profile)
     };
 
-    let target_dir = installer.resolve_target(target, global)?;
-
     println!();
     println!("Profile: {}", actual_profile_name.cyan());
-    println!("Target: {}", target_dir.display());
+
+    // Determine platforms and target directories
+    let install_targets: Vec<(Option<Platform>, PathBuf)> = match &install_target {
+        InstallTarget::Custom(path) => {
+            // Custom path: use as-is, no platform filtering
+            vec![(None, path.clone())]
+        }
+        InstallTarget::Single(platform) => {
+            // Single platform
+            if global || target.is_none() {
+                vec![(Some(*platform), platform.base_dir())]
+            } else {
+                // --path was specified, use it with platform filter
+                let target_dir = installer.resolve_target(target, global)?;
+                vec![(Some(*platform), target_dir)]
+            }
+        }
+        InstallTarget::All => {
+            // All platforms
+            Platform::all()
+                .iter()
+                .map(|p| (Some(*p), p.base_dir()))
+                .collect()
+        }
+    };
+
     if dry_run {
         println!("{}", "(dry run)".yellow());
     }
@@ -1157,8 +1246,6 @@ fn handle_install(
     if no_merge {
         println!("{}", "(no merge)".yellow());
     }
-    println!();
-    println!("Installing...");
 
     let on_file = |status: &str, path: &str| {
         let status_str = match status {
@@ -1172,96 +1259,142 @@ fn handle_install(
         println!("  {} {}", status_str, path);
     };
 
-    let opts = InstallOptions::new()
-        .force(force)
-        .dry_run(dry_run)
-        .no_prefix(no_prefix)
-        .no_merge(no_merge)
-        .ignore_config(ignore_config.clone())
-        .on_file(Some(&on_file));
-    let result = installer.install(&profile, &target_dir, &opts)?;
+    let mut total_installed = 0;
+    let mut total_skipped = 0;
+    let mut total_merged = 0;
+    let mut total_conflicts = 0;
+    let mut conflict_paths = Vec::new();
 
-    println!();
-    println!("Summary:");
-    println!("  Installed: {}", result.installed);
-    if result.merged > 0 {
-        println!("  Merged: {}", result.merged);
-    }
-    println!("  Skipped: {}", result.skipped);
-    println!("  Conflicts: {}", result.conflicts);
-
-    if result.conflicts > 0 {
+    for (platform, target_dir) in &install_targets {
         println!();
-        return Err(DotAgentError::Conflict { path: target_dir });
-    }
-
-    // Auto-register plugin if profile has plugin features
-    if !dry_run {
-        use dot_agent_core::{PluginRegistrar, PluginScope};
-
-        let features = PluginRegistrar::get_plugin_features(&profile.path);
-        if !features.is_empty() {
-            println!();
+        if let Some(p) = platform {
             println!(
-                "{} {}",
-                "Plugin features detected:".cyan(),
-                features.join(", ")
+                "{} {} ({})",
+                "Platform:".cyan(),
+                p.name(),
+                target_dir.display()
             );
+        } else {
+            println!("Target: {}", target_dir.display());
+        }
+        println!("Installing...");
 
-            // Determine scope based on global flag
-            let scope = if global {
-                PluginScope::User
-            } else {
-                PluginScope::Project
-            };
+        let mut opts = InstallOptions::new()
+            .force(force)
+            .dry_run(dry_run)
+            .no_prefix(no_prefix)
+            .no_merge(no_merge)
+            .ignore_config(ignore_config.clone())
+            .on_file(Some(&on_file));
 
-            match PluginRegistrar::new() {
-                Ok(registrar) => {
-                    match registrar.register_plugin(
-                        &profile.path,
-                        &actual_profile_name,
-                        scope,
-                        target.map(|p| p.parent().unwrap_or(p)),
-                    ) {
-                        Ok(reg_result) => {
-                            if reg_result.registered {
-                                println!(
-                                    "{} Plugin registered to {}",
-                                    "[OK]".green(),
-                                    reg_result
-                                        .settings_path
-                                        .as_ref()
-                                        .map(|p| p.display().to_string())
-                                        .unwrap_or_default()
+        // Apply platform filter if specified
+        if let Some(p) = platform {
+            opts = opts.platform(*p);
+        }
+
+        let result = installer.install(&profile, target_dir, &opts)?;
+
+        println!();
+        println!("Summary:");
+        println!("  Installed: {}", result.installed);
+        if result.merged > 0 {
+            println!("  Merged: {}", result.merged);
+        }
+        println!("  Skipped: {}", result.skipped);
+        println!("  Conflicts: {}", result.conflicts);
+
+        total_installed += result.installed;
+        total_skipped += result.skipped;
+        total_merged += result.merged;
+        total_conflicts += result.conflicts;
+
+        if result.conflicts > 0 {
+            conflict_paths.push(target_dir.clone());
+        }
+
+        // Auto-register plugin if profile has plugin features (Claude only)
+        if !dry_run && platform.map_or(true, |p| p == Platform::Claude) {
+            use dot_agent_core::{PluginRegistrar, PluginScope};
+
+            let features = PluginRegistrar::get_plugin_features(&profile.path);
+            if !features.is_empty() {
+                println!();
+                println!(
+                    "{} {}",
+                    "Plugin features detected:".cyan(),
+                    features.join(", ")
+                );
+
+                // Determine scope based on global flag
+                let scope = if global || install_target.is_multi() {
+                    PluginScope::User
+                } else {
+                    PluginScope::Project
+                };
+
+                match PluginRegistrar::new() {
+                    Ok(registrar) => {
+                        match registrar.register_plugin(
+                            &profile.path,
+                            &actual_profile_name,
+                            scope,
+                            target.map(|p| p.parent().unwrap_or(p)),
+                        ) {
+                            Ok(reg_result) => {
+                                if reg_result.registered {
+                                    println!(
+                                        "{} Plugin registered to {}",
+                                        "[OK]".green(),
+                                        reg_result
+                                            .settings_path
+                                            .as_ref()
+                                            .map(|p| p.display().to_string())
+                                            .unwrap_or_default()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "{} Failed to register plugin: {}",
+                                    "[WARN]".yellow().bold(),
+                                    e
                                 );
                             }
                         }
-                        Err(e) => {
-                            eprintln!(
-                                "{} Failed to register plugin: {}",
-                                "[WARN]".yellow().bold(),
-                                e
-                            );
-                        }
                     }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "{} Failed to initialize plugin registrar: {}",
-                        "[WARN]".yellow().bold(),
-                        e
-                    );
+                    Err(e) => {
+                        eprintln!(
+                            "{} Failed to initialize plugin registrar: {}",
+                            "[WARN]".yellow().bold(),
+                            e
+                        );
+                    }
                 }
             }
         }
     }
 
+    // Final summary for multi-platform installs
+    if install_targets.len() > 1 {
+        println!();
+        println!("{}", "=== Total Summary ===".cyan().bold());
+        println!("  Installed: {}", total_installed);
+        if total_merged > 0 {
+            println!("  Merged: {}", total_merged);
+        }
+        println!("  Skipped: {}", total_skipped);
+        println!("  Conflicts: {}", total_conflicts);
+    }
+
+    if total_conflicts > 0 {
+        println!();
+        return Err(DotAgentError::Conflict {
+            path: conflict_paths.first().cloned().unwrap_or_default(),
+        });
+    }
+
     println!();
-    println!(
-        "{} {}",
-        "Installation complete:".green(),
-        target_dir.display()
-    );
+    println!("{}", "Installation complete!".green());
 
     Ok(())
 }
@@ -1277,6 +1410,7 @@ fn handle_upgrade(
     no_prefix: bool,
     no_merge: bool,
     ignore_config: IgnoreConfig,
+    _install_target: InstallTarget, // TODO: Implement multi-platform support
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -1344,6 +1478,7 @@ fn handle_diff(
     target: Option<&Path>,
     global: bool,
     ignore_config: IgnoreConfig,
+    _install_target: InstallTarget, // TODO: Implement multi-platform support
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -1393,6 +1528,7 @@ fn handle_remove(
     dry_run: bool,
     no_merge: bool,
     ignore_config: IgnoreConfig,
+    _install_target: InstallTarget, // TODO: Implement multi-platform support
 ) -> Result<()> {
     let manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -1644,7 +1780,12 @@ fn handle_copy(base_dir: &Path, source: &str, dest: &str, force: bool) -> Result
     Ok(())
 }
 
-fn handle_status(base_dir: &Path, target: Option<&Path>, global: bool) -> Result<()> {
+fn handle_status(
+    base_dir: &Path,
+    target: Option<&Path>,
+    global: bool,
+    _install_target: InstallTarget, // TODO: Implement multi-platform support
+) -> Result<()> {
     let installer = Installer::new(base_dir.to_path_buf());
     let target_dir = installer.resolve_target(target, global)?;
 
@@ -2695,6 +2836,7 @@ fn handle_switch(
     global: bool,
     no_snapshot: bool,
     force: bool,
+    _install_target: InstallTarget, // TODO: Implement multi-platform support
 ) -> Result<()> {
     use dot_agent_core::snapshot::{SnapshotManager, SnapshotTrigger};
 

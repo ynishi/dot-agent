@@ -27,10 +27,10 @@ impl Default for ChannelRegistry {
 impl ChannelRegistry {
     const FILENAME: &'static str = "channels.toml";
 
-    /// Create registry with default channels (github-global)
+    /// Create registry with default channels (github-global, codex-skills)
     pub fn with_defaults() -> Self {
         Self {
-            channels: vec![Channel::github_global()],
+            channels: vec![Channel::github_global(), Channel::codex_skills()],
         }
     }
 
@@ -47,13 +47,20 @@ impl ChannelRegistry {
                 message: e.to_string(),
             })?;
 
-        // Ensure github-global is always present
+        // Ensure builtin channels are always present
         if !registry
             .channels
             .iter()
             .any(|c| c.builtin && c.name == "github")
         {
             registry.channels.insert(0, Channel::github_global());
+        }
+        if !registry
+            .channels
+            .iter()
+            .any(|c| c.builtin && c.name == "codex")
+        {
+            registry.channels.push(Channel::codex_skills());
         }
 
         Ok(registry)
@@ -176,18 +183,21 @@ mod tests {
     #[test]
     fn registry_with_defaults() {
         let registry = ChannelRegistry::with_defaults();
-        assert_eq!(registry.channels.len(), 1);
+        assert_eq!(registry.channels.len(), 2);
         assert_eq!(registry.channels[0].name, "github");
         assert!(registry.channels[0].builtin);
+        assert_eq!(registry.channels[1].name, "codex");
+        assert!(registry.channels[1].builtin);
     }
 
     #[test]
     fn registry_add_remove() {
         let mut registry = ChannelRegistry::with_defaults();
+        let initial_count = registry.channels.len(); // 2 (github + codex)
 
         let channel = Channel::from_url("test", "https://github.com/test/awesome");
         registry.add(channel).unwrap();
-        assert_eq!(registry.channels.len(), 2);
+        assert_eq!(registry.channels.len(), initial_count + 1);
 
         // Duplicate should fail
         let channel2 = Channel::from_url("test", "https://github.com/other/awesome");
@@ -196,10 +206,11 @@ mod tests {
         // Remove
         let removed = registry.remove("test").unwrap();
         assert_eq!(removed.name, "test");
-        assert_eq!(registry.channels.len(), 1);
+        assert_eq!(registry.channels.len(), initial_count);
 
         // Cannot remove builtin
         assert!(registry.remove("github").is_err());
+        assert!(registry.remove("codex").is_err());
     }
 
     #[test]
@@ -224,14 +235,16 @@ mod tests {
         let base = temp.path();
 
         let mut registry = ChannelRegistry::with_defaults();
+        let initial_count = registry.channels.len(); // 2 (github + codex)
         registry
             .add(Channel::from_url("test", "https://github.com/test/awesome"))
             .unwrap();
         registry.save(base).unwrap();
 
         let loaded = ChannelRegistry::load(base).unwrap();
-        assert_eq!(loaded.channels.len(), 2);
+        assert_eq!(loaded.channels.len(), initial_count + 1);
         assert!(loaded.get("github").is_some());
+        assert!(loaded.get("codex").is_some());
         assert!(loaded.get("test").is_some());
     }
 
@@ -252,8 +265,8 @@ mod tests {
             .unwrap();
 
         let searchable = registry.list_searchable();
-        // github-global and awesome1 are searchable
-        assert_eq!(searchable.len(), 2);
+        // github-global, codex (marketplace), and awesome1 are searchable
+        assert_eq!(searchable.len(), 3);
     }
 
     #[test]

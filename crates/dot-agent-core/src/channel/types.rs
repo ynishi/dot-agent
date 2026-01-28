@@ -314,6 +314,19 @@ impl Channel {
         }
     }
 
+    /// Create the builtin Codex Skills Catalog channel (openai/skills)
+    pub fn codex_skills() -> Self {
+        Self {
+            name: "codex".to_string(),
+            channel_type: ChannelType::Marketplace,
+            source: ChannelSource::marketplace("openai/skills"),
+            description: Some("OpenAI Codex CLI Skills Catalog".to_string()),
+            added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            enabled: true,
+            builtin: true,
+        }
+    }
+
     /// Set description
     pub fn with_description(mut self, desc: impl Into<String>) -> Self {
         self.description = Some(desc.into());

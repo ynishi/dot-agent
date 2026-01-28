@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{DotAgentError, Result};
 use crate::json_merge::{is_mergeable_json, merge_json_file, unmerge_json_file};
 use crate::metadata::{compute_file_hash, compute_hash, Metadata};
+use crate::platform::Platform;
 use crate::profile::{IgnoreConfig, Profile};
 
 const CLAUDE_MD: &str = "CLAUDE.md";
@@ -69,6 +70,8 @@ pub struct InstallOptions<'a> {
     pub ignore_config: IgnoreConfig,
     /// Callback for file operation progress
     pub on_file: FileCallback<'a>,
+    /// Target platform (for filtering unsupported files)
+    pub platform: Option<Platform>,
 }
 
 impl std::fmt::Debug for InstallOptions<'_> {
@@ -80,6 +83,7 @@ impl std::fmt::Debug for InstallOptions<'_> {
             .field("no_merge", &self.no_merge)
             .field("ignore_config", &self.ignore_config)
             .field("on_file", &self.on_file.is_some())
+            .field("platform", &self.platform)
             .finish()
     }
 }
@@ -128,6 +132,20 @@ impl<'a> InstallOptions<'a> {
         self.on_file = callback;
         self
     }
+
+    /// Set target platform for filtering
+    pub fn platform(mut self, platform: Platform) -> Self {
+        self.platform = Some(platform);
+        self
+    }
+
+    /// Check if a path should be included for the target platform
+    pub fn should_include_path(&self, path: &Path) -> bool {
+        match self.platform {
+            Some(platform) => platform.supports_path(path),
+            None => true, // No platform filter, include everything
+        }
+    }
 }
 
 pub struct Installer {
@@ -175,6 +193,18 @@ impl Installer {
         let files = profile.list_files_with_config(&opts.ignore_config)?;
 
         for relative_path in files {
+            // Platform filtering: skip files not supported by target platform
+            if !opts.should_include_path(&relative_path) {
+                if let Some(f) = opts.on_file {
+                    f(
+                        "SKIP",
+                        &format!("{} (unsupported)", relative_path.display()),
+                    );
+                }
+                result.skipped += 1;
+                continue;
+            }
+
             let src = profile.path.join(&relative_path);
             let prefixed_path = if opts.no_prefix {
                 relative_path.clone()

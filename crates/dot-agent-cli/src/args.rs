@@ -167,6 +167,18 @@ pub enum Commands {
         #[arg(short, long)]
         global: bool,
 
+        /// Install to Codex CLI (~/.codex/skills/)
+        #[arg(long, group = "platform")]
+        codex: bool,
+
+        /// Install to Claude Code (~/.claude/) - default
+        #[arg(long, group = "platform")]
+        claude: bool,
+
+        /// Install to all platforms (Claude + Codex)
+        #[arg(long, group = "platform")]
+        all: bool,
+
         /// Force overwrite on conflicts
         #[arg(short, long)]
         force: bool,
@@ -204,6 +216,18 @@ pub enum Commands {
         /// Upgrade ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
+
+        /// Upgrade Codex CLI (~/.codex/skills/)
+        #[arg(long, group = "platform")]
+        codex: bool,
+
+        /// Upgrade Claude Code (~/.claude/) - default
+        #[arg(long, group = "platform")]
+        claude: bool,
+
+        /// Upgrade all platforms (Claude + Codex)
+        #[arg(long, group = "platform")]
+        all: bool,
 
         /// Force overwrite local modifications
         #[arg(short, long)]
@@ -243,6 +267,18 @@ pub enum Commands {
         #[arg(short, long)]
         global: bool,
 
+        /// Diff Codex CLI (~/.codex/skills/)
+        #[arg(long, group = "platform")]
+        codex: bool,
+
+        /// Diff Claude Code (~/.claude/) - default
+        #[arg(long, group = "platform")]
+        claude: bool,
+
+        /// Diff all platforms (Claude + Codex)
+        #[arg(long, group = "platform")]
+        all: bool,
+
         /// Include directories that are excluded by default (e.g., --include=.git)
         #[arg(long, value_name = "DIR")]
         include: Vec<String>,
@@ -264,6 +300,18 @@ pub enum Commands {
         /// Remove from ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
+
+        /// Remove from Codex CLI (~/.codex/skills/)
+        #[arg(long, group = "platform")]
+        codex: bool,
+
+        /// Remove from Claude Code (~/.claude/) - default
+        #[arg(long, group = "platform")]
+        claude: bool,
+
+        /// Remove from all platforms (Claude + Codex)
+        #[arg(long, group = "platform")]
+        all: bool,
 
         /// Force remove even with local modifications
         #[arg(short, long)]
@@ -295,6 +343,18 @@ pub enum Commands {
         /// Use ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
+
+        /// Status for Codex CLI (~/.codex/skills/)
+        #[arg(long, group = "platform")]
+        codex: bool,
+
+        /// Status for Claude Code (~/.claude/) - default
+        #[arg(long, group = "platform")]
+        claude: bool,
+
+        /// Status for all platforms (Claude + Codex)
+        #[arg(long, group = "platform")]
+        all: bool,
     },
 
     /// Copy an existing profile to a new name
@@ -352,6 +412,18 @@ pub enum Commands {
         /// Switch ~/.claude directly (ignores --path)
         #[arg(short, long)]
         global: bool,
+
+        /// Switch Codex CLI (~/.codex/skills/)
+        #[arg(long, group = "platform")]
+        codex: bool,
+
+        /// Switch Claude Code (~/.claude/) - default
+        #[arg(long, group = "platform")]
+        claude: bool,
+
+        /// Switch all platforms (Claude + Codex)
+        #[arg(long, group = "platform")]
+        all: bool,
 
         /// Skip snapshot before switching
         #[arg(long)]
