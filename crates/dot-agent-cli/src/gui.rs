@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 use eframe::egui;
 
@@ -61,6 +62,16 @@ struct DotAgentApp {
     create_rule_name: String,
     show_delete_rule_confirm: bool,
 
+    // Dialog state - Import
+    show_import_dialog: bool,
+    import_source_is_git: bool,
+    import_url: String,
+    import_local_path: String,
+    import_name: String,
+    import_branch: String,
+    import_subpath: String,
+    import_force: bool,
+
     // Status
     status_message: Option<(String, MessageType)>,
 }
@@ -99,6 +110,14 @@ impl DotAgentApp {
             show_create_rule_dialog: false,
             create_rule_name: String::new(),
             show_delete_rule_confirm: false,
+            show_import_dialog: false,
+            import_source_is_git: true,
+            import_url: String::new(),
+            import_local_path: String::new(),
+            import_name: String::new(),
+            import_branch: String::new(),
+            import_subpath: String::new(),
+            import_force: false,
             status_message: None,
         }
     }
@@ -114,6 +133,7 @@ impl eframe::App for DotAgentApp {
         // Render dialogs first (modal)
         self.render_create_profile_dialog(ctx);
         self.render_delete_profile_confirm(ctx);
+        self.render_import_dialog(ctx);
         self.render_create_rule_dialog(ctx);
         self.render_delete_rule_confirm(ctx);
 
@@ -185,11 +205,23 @@ impl eframe::App for DotAgentApp {
 
 impl DotAgentApp {
     fn render_profiles_list(&mut self, ui: &mut egui::Ui) {
-        // Add button at top
-        if ui.button("+ Add Profile").clicked() {
-            self.show_create_profile_dialog = true;
-            self.create_profile_name.clear();
-        }
+        // Add buttons at top
+        ui.horizontal(|ui| {
+            if ui.button("+ New").clicked() {
+                self.show_create_profile_dialog = true;
+                self.create_profile_name.clear();
+            }
+            if ui.button("⬇ Import").clicked() {
+                self.show_import_dialog = true;
+                self.import_source_is_git = true;
+                self.import_url.clear();
+                self.import_local_path.clear();
+                self.import_name.clear();
+                self.import_branch.clear();
+                self.import_subpath.clear();
+                self.import_force = false;
+            }
+        });
         ui.add_space(8.0);
 
         match self.profile_manager.list_profiles() {
@@ -519,6 +551,111 @@ impl DotAgentApp {
 
         if !open {
             self.show_delete_profile_confirm = false;
+        }
+    }
+
+    fn render_import_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_import_dialog {
+            return;
+        }
+
+        let mut open = true;
+        egui::Window::new("Import Profile")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(450.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                // Source type selector
+                ui.horizontal(|ui| {
+                    ui.label("Source:");
+                    ui.selectable_value(&mut self.import_source_is_git, true, "Git URL");
+                    ui.selectable_value(&mut self.import_source_is_git, false, "Local Directory");
+                });
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                if self.import_source_is_git {
+                    // Git URL input
+                    ui.horizontal(|ui| {
+                        ui.label("Git URL:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.import_url)
+                                .hint_text("https://github.com/user/repo"),
+                        );
+                    });
+
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Branch:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.import_branch)
+                                .hint_text("(default branch)"),
+                        );
+                    });
+                } else {
+                    // Local directory input
+                    ui.horizontal(|ui| {
+                        ui.label("Directory:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.import_local_path)
+                                .hint_text("/path/to/profile"),
+                        );
+                        if ui.button("Browse...").clicked() {
+                            if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                self.import_local_path = path.display().to_string();
+                            }
+                        }
+                    });
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Subpath:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.import_subpath).hint_text("(root)"),
+                    );
+                });
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.import_name)
+                            .hint_text("(auto from source)"),
+                    );
+                });
+
+                ui.add_space(4.0);
+                ui.checkbox(&mut self.import_force, "Force overwrite if exists");
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let can_import = if self.import_source_is_git {
+                        !self.import_url.is_empty()
+                    } else {
+                        !self.import_local_path.is_empty()
+                    };
+                    if ui
+                        .add_enabled(can_import, egui::Button::new("Import"))
+                        .clicked()
+                    {
+                        if self.import_source_is_git {
+                            self.do_import_from_git();
+                        } else {
+                            self.do_import_from_local();
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_import_dialog = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_import_dialog = false;
         }
     }
 
@@ -867,4 +1004,218 @@ impl DotAgentApp {
             }
         }
     }
+
+    fn do_import_from_git(&mut self) {
+        let url = self.import_url.trim();
+        if url.is_empty() {
+            self.status_message = Some(("Git URL is required".to_string(), MessageType::Error));
+            self.show_import_dialog = false;
+            return;
+        }
+
+        // Extract repo name from URL for default profile name
+        let repo_name = extract_repo_name(url);
+
+        // Create temp directory
+        let temp_dir = std::env::temp_dir().join(format!("dot-agent-gui-{}", std::process::id()));
+
+        self.status_message = Some((format!("Cloning {}...", url), MessageType::Info));
+
+        // Build git clone command
+        let mut cmd = Command::new("git");
+        cmd.arg("clone");
+        cmd.arg("--depth").arg("1");
+
+        let branch = if self.import_branch.trim().is_empty() {
+            None
+        } else {
+            Some(self.import_branch.trim().to_string())
+        };
+
+        if let Some(ref b) = branch {
+            cmd.arg("--branch").arg(b);
+        }
+
+        cmd.arg(url);
+        cmd.arg(&temp_dir);
+
+        let output = match cmd.output() {
+            Ok(o) => o,
+            Err(e) => {
+                self.status_message = Some((format!("Failed to run git: {e}"), MessageType::Error));
+                self.show_import_dialog = false;
+                return;
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            self.status_message =
+                Some((format!("git clone failed: {}", stderr), MessageType::Error));
+            self.show_import_dialog = false;
+            return;
+        }
+
+        // Determine import path
+        let subpath = if self.import_subpath.trim().is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(self.import_subpath.trim()))
+        };
+
+        let import_path = if let Some(ref sub) = subpath {
+            temp_dir.join(sub)
+        } else {
+            temp_dir.clone()
+        };
+
+        if !import_path.exists() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            self.status_message = Some((
+                format!("Subpath '{}' not found in repository", self.import_subpath),
+                MessageType::Error,
+            ));
+            self.show_import_dialog = false;
+            return;
+        }
+
+        // Determine profile name
+        let profile_name = if self.import_name.trim().is_empty() {
+            let mut parts = vec![repo_name];
+            if let Some(ref sub) = subpath {
+                if let Some(name) = sub.file_name() {
+                    parts.push(name.to_string_lossy().to_string());
+                }
+            }
+            if let Some(ref b) = branch {
+                parts.push(b.clone());
+            }
+            parts.join("_")
+        } else {
+            self.import_name.trim().to_string()
+        };
+
+        // Import with git source info
+        let subpath_str = subpath.as_ref().map(|p| p.to_string_lossy().to_string());
+        let result = self.profile_manager.import_profile_from_git(
+            &import_path,
+            &profile_name,
+            self.import_force,
+            url,
+            branch.as_deref(),
+            None,
+            subpath_str.as_deref(),
+        );
+
+        // Cleanup temp directory
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        match result {
+            Ok(profile) => {
+                self.status_message = Some((
+                    format!("Imported '{}' from {}", profile.name, url),
+                    MessageType::Success,
+                ));
+                self.selected_profile = Some(profile.name);
+                self.show_import_dialog = false;
+                self.refresh();
+            }
+            Err(e) => {
+                self.status_message = Some((format!("Import failed: {e}"), MessageType::Error));
+                self.show_import_dialog = false;
+            }
+        }
+    }
+
+    fn do_import_from_local(&mut self) {
+        let source = self.import_local_path.trim();
+        if source.is_empty() {
+            self.status_message =
+                Some(("Directory path is required".to_string(), MessageType::Error));
+            self.show_import_dialog = false;
+            return;
+        }
+
+        let source_path = PathBuf::from(source);
+
+        // Determine import path with optional subpath
+        let subpath = if self.import_subpath.trim().is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(self.import_subpath.trim()))
+        };
+
+        let import_path = if let Some(ref sub) = subpath {
+            source_path.join(sub)
+        } else {
+            source_path.clone()
+        };
+
+        if !import_path.exists() {
+            self.status_message = Some((
+                format!("Directory not found: {}", import_path.display()),
+                MessageType::Error,
+            ));
+            self.show_import_dialog = false;
+            return;
+        }
+
+        // Determine profile name
+        let profile_name = if self.import_name.trim().is_empty() {
+            import_path
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("profile"))
+                .to_string_lossy()
+                .to_string()
+        } else {
+            self.import_name.trim().to_string()
+        };
+
+        match self
+            .profile_manager
+            .import_profile(&import_path, &profile_name, self.import_force)
+        {
+            Ok(profile) => {
+                self.status_message = Some((
+                    format!("Imported '{}' from {}", profile.name, import_path.display()),
+                    MessageType::Success,
+                ));
+                self.selected_profile = Some(profile.name);
+                self.show_import_dialog = false;
+                self.refresh();
+            }
+            Err(e) => {
+                self.status_message = Some((format!("Import failed: {e}"), MessageType::Error));
+                self.show_import_dialog = false;
+            }
+        }
+    }
+}
+
+/// Extract repository name from Git URL
+fn extract_repo_name(url: &str) -> String {
+    // Handle various URL formats:
+    // https://github.com/user/repo.git -> repo
+    // https://github.com/user/repo -> repo
+    // git@github.com:user/repo.git -> repo
+    let url = url.trim_end_matches('/');
+    let url = url.trim_end_matches(".git");
+
+    if let Some(last_segment) = url.rsplit('/').next() {
+        if !last_segment.is_empty() {
+            return last_segment.to_string();
+        }
+    }
+
+    // Fallback for git@github.com:user/repo format
+    if let Some(pos) = url.rfind(':') {
+        let after_colon = &url[pos + 1..];
+        if let Some(repo) = after_colon.rsplit('/').next() {
+            if !repo.is_empty() {
+                return repo.to_string();
+            }
+        }
+    }
+
+    "profile".to_string()
 }
