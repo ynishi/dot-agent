@@ -252,6 +252,10 @@ pub struct ProfileMetadata {
     /// Plugin configuration
     #[serde(default)]
     pub plugin: PluginConfig,
+
+    /// Category configurations (overrides builtin categories)
+    #[serde(default)]
+    pub categories: Option<crate::category::CategoriesConfig>,
 }
 
 /// Profile info section in .dot-agent.toml
@@ -285,6 +289,7 @@ impl ProfileMetadata {
             },
             source: ProfileSource::Local,
             plugin: PluginConfig::default(),
+            categories: None,
         }
     }
 
@@ -310,6 +315,7 @@ impl ProfileMetadata {
                 path: path.map(|s| s.to_string()),
             },
             plugin: PluginConfig::default(),
+            categories: None,
         }
     }
 
@@ -328,6 +334,7 @@ impl ProfileMetadata {
                 version: version.to_string(),
             },
             plugin: PluginConfig::default(),
+            categories: None,
         }
     }
 

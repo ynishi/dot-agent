@@ -8,11 +8,10 @@ use colored::Colorize;
 
 use dot_agent_core::channel::ChannelManager;
 use dot_agent_core::config::Config;
-use dot_agent_core::installer::{FileStatus, InstallOptions, Installer};
-use dot_agent_core::metadata::Metadata;
+use dot_agent_core::install::{FileStatus, InstallOptions, Installer};
 use dot_agent_core::platform::InstallTarget;
 use dot_agent_core::profile::{IgnoreConfig, ProfileManager};
-use dot_agent_core::{DotAgentError, Result};
+use dot_agent_core::{DotAgentError, Metadata, Result};
 
 mod args;
 use args::{
@@ -206,6 +205,32 @@ fn main() -> ExitCode {
         }) => handle_apply(&base_dir, &rule, profile.as_deref(), path.as_deref(), force),
         Some(Commands::Rule { action }) => handle_rule(action, &base_dir),
         Some(Commands::Snapshot { action }) => handle_snapshot(action, &base_dir),
+        Some(Commands::Categories {
+            profile,
+            uncategorized,
+            category,
+            detailed,
+        }) => handle_categories(
+            &base_dir,
+            &profile,
+            uncategorized,
+            category.as_deref(),
+            detailed,
+        ),
+        Some(Commands::Fusion {
+            specs,
+            output,
+            force,
+            dry_run,
+            include_uncategorized,
+        }) => handle_fusion(
+            &base_dir,
+            &specs,
+            &output,
+            force,
+            dry_run,
+            include_uncategorized,
+        ),
         Some(Commands::Switch {
             profile,
             path,
@@ -2227,7 +2252,7 @@ fn handle_profile_snapshot(
     base_dir: &Path,
     profile_manager: &ProfileManager,
 ) -> Result<()> {
-    use dot_agent_core::snapshot::ProfileSnapshotManager;
+    use dot_agent_core::ProfileSnapshotManager;
 
     let snapshot_manager = ProfileSnapshotManager::new(base_dir.to_path_buf());
 
@@ -2660,7 +2685,7 @@ fn handle_rule(action: RuleAction, base_dir: &Path) -> Result<()> {
 }
 
 fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
-    use dot_agent_core::snapshot::{SnapshotManager, SnapshotTrigger};
+    use dot_agent_core::{SnapshotManager, SnapshotTrigger};
 
     let snapshot_manager = SnapshotManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -2907,7 +2932,7 @@ fn handle_switch(
     force: bool,
     _install_target: InstallTarget, // TODO: Implement multi-platform support
 ) -> Result<()> {
-    use dot_agent_core::snapshot::{SnapshotManager, SnapshotTrigger};
+    use dot_agent_core::{SnapshotManager, SnapshotTrigger};
 
     let profile_manager = ProfileManager::new(base_dir.to_path_buf());
     let installer = Installer::new(base_dir.to_path_buf());
@@ -3189,4 +3214,265 @@ fn import_marketplace_plugin(
 
     // Return the newly imported profile
     manager.get_profile(&profile_name)
+}
+
+// ============================================================================
+// Category commands
+// ============================================================================
+
+/// Determine classification mode from config
+fn get_classification_mode(base_dir: &Path) -> dot_agent_core::ClassificationMode {
+    use dot_agent_core::{ClassificationMode, Config};
+
+    let config = Config::load(base_dir).unwrap_or_default();
+    if config.llm.enabled {
+        ClassificationMode::Llm
+    } else {
+        ClassificationMode::Glob
+    }
+}
+
+fn handle_categories(
+    base_dir: &Path,
+    profile_name: &str,
+    show_uncategorized: bool,
+    filter_category: Option<&str>,
+    detailed: bool,
+) -> Result<()> {
+    use dot_agent_core::category::CategoryClassifier;
+
+    let manager = ProfileManager::new(base_dir.to_path_buf());
+    let profile = manager.get_profile(profile_name)?;
+
+    let mode = get_classification_mode(base_dir);
+
+    // Build classifier from profile (includes any custom category definitions)
+    let classifier = CategoryClassifier::from_profile(&profile, mode)?;
+    let result = classifier.classify(&profile)?;
+
+    // If filtering by specific category
+    if let Some(cat_name) = filter_category {
+        let cat_def =
+            classifier
+                .get_category(cat_name)
+                .ok_or_else(|| DotAgentError::CategoryNotFound {
+                    name: cat_name.to_string(),
+                })?;
+
+        let files = result.files_in_category(cat_name);
+        println!(
+            "{} {} ({})",
+            "[Category]".cyan().bold(),
+            cat_name.bold(),
+            cat_def.description.dimmed()
+        );
+        println!();
+
+        if files.is_empty() {
+            println!("  {}", "No files in this category".dimmed());
+        } else {
+            for file in &files {
+                println!("  {}", file.display());
+            }
+            println!();
+            println!("  {} files", files.len());
+        }
+
+        return Ok(());
+    }
+
+    // Show summary
+    println!(
+        "{} {} ({})",
+        "[Profile]".cyan().bold(),
+        profile_name.bold(),
+        result.files.len()
+    );
+    println!();
+
+    // Get category counts
+    let counts = result.category_counts();
+    let mut categories: Vec<_> = classifier.category_names().into_iter().collect();
+    categories.sort();
+
+    // Show categories with file counts
+    println!("{}", "Categories:".bold());
+    for cat_name in &categories {
+        let count = counts.get(*cat_name).copied().unwrap_or(0);
+        if count > 0 || detailed {
+            let cat_def = classifier.get_category(cat_name);
+            let desc = cat_def
+                .map(|c| c.description.chars().take(50).collect::<String>())
+                .unwrap_or_default();
+
+            if count > 0 {
+                println!(
+                    "  {} {:>3} files  {}",
+                    cat_name.green(),
+                    count,
+                    desc.dimmed()
+                );
+            } else {
+                println!(
+                    "  {} {:>3} files  {}",
+                    cat_name.dimmed(),
+                    count,
+                    desc.dimmed()
+                );
+            }
+
+            // Show files if detailed mode
+            if detailed && count > 0 {
+                let files = result.files_in_category(cat_name);
+                for file in files.iter().take(5) {
+                    println!("      {}", file.display().to_string().dimmed());
+                }
+                if files.len() > 5 {
+                    println!(
+                        "      {} more...",
+                        format!("... and {}", files.len() - 5).dimmed()
+                    );
+                }
+            }
+        }
+    }
+
+    // Show uncategorized files
+    let uncategorized = result.uncategorized();
+    if !uncategorized.is_empty() {
+        println!();
+        println!(
+            "{} {} files",
+            "Uncategorized:".yellow(),
+            uncategorized.len()
+        );
+
+        if show_uncategorized || detailed {
+            for file in &uncategorized {
+                println!("  {}", file.display().to_string().dimmed());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_fusion(
+    base_dir: &Path,
+    specs: &[String],
+    output_name: &str,
+    force: bool,
+    dry_run: bool,
+    include_uncategorized: bool,
+) -> Result<()> {
+    use dot_agent_core::{FusionConfig, FusionExecutor, FusionSpec};
+
+    let manager = ProfileManager::new(base_dir.to_path_buf());
+    let mode = get_classification_mode(base_dir);
+
+    // Parse specs
+    let parsed_specs: Vec<FusionSpec> = specs
+        .iter()
+        .map(|s| FusionSpec::parse(s))
+        .collect::<dot_agent_core::Result<Vec<_>>>()?;
+
+    // Check output profile exists (for warning display)
+    let output_exists = manager.get_profile(output_name).is_ok();
+    if output_exists && force && !dry_run {
+        println!(
+            "{} Profile '{}' exists, will be overwritten",
+            "[WARN]".yellow(),
+            output_name
+        );
+    }
+
+    println!(
+        "{} Fusing {} sources into '{}'",
+        "[Fusion]".cyan().bold(),
+        parsed_specs.len(),
+        output_name.bold()
+    );
+    println!();
+
+    // Display spec summary
+    for (idx, spec) in parsed_specs.iter().enumerate() {
+        println!(
+            "  {} {}:{}",
+            format!("[{}]", idx + 1).dimmed(),
+            spec.profile_name.green(),
+            spec.category.cyan(),
+        );
+    }
+    println!();
+
+    // Configure and create executor
+    let config = FusionConfig {
+        mode,
+        force,
+        include_uncategorized,
+        dry_run,
+    };
+    let executor = FusionExecutor::new(parsed_specs, config);
+
+    // Get plan first
+    let plan = executor.plan(&manager)?;
+
+    // Report conflicts
+    if !plan.conflicts.is_empty() {
+        println!(
+            "{} {} conflicts (later spec wins):",
+            "[WARN]".yellow(),
+            plan.conflicts.len()
+        );
+        for conflict in &plan.conflicts {
+            let profiles: Vec<_> = conflict
+                .sources
+                .iter()
+                .map(|s| s.profile_name.as_str())
+                .collect();
+            println!(
+                "  {} <- {}",
+                conflict.path.display().to_string().dimmed(),
+                profiles.join(", ")
+            );
+        }
+        println!();
+    }
+
+    // Summary
+    println!("{} {} files to copy", "[Summary]".cyan(), plan.files.len());
+
+    if dry_run {
+        println!();
+        println!("{}", "[DRY RUN] No files copied".yellow());
+        for file in &plan.files {
+            println!(
+                "  {} {} (from {})",
+                "->".dimmed(),
+                file.dest_path,
+                file.source_profile.dimmed()
+            );
+        }
+        return Ok(());
+    }
+
+    // Execute fusion with the plan we already have
+    let result = executor.execute_plan(&plan, &manager, output_name)?;
+
+    println!();
+    println!(
+        "{} Created profile '{}' with {} files",
+        "[OK]".green().bold(),
+        output_name,
+        result.files_copied
+    );
+
+    // Show contributions
+    println!();
+    println!("Contributions:");
+    for (profile, count) in &result.contributions {
+        println!("  {} {} files", profile.green(), count);
+    }
+
+    Ok(())
 }

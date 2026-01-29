@@ -1,3 +1,6 @@
+mod fusion;
+mod metadata;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,9 +9,16 @@ use once_cell::unsync::OnceCell;
 use walkdir::WalkDir;
 
 use crate::error::{DotAgentError, Result};
-use crate::plugin_manifest::{FilterConfig, PluginManifest, DEFAULT_COMPONENT_DIRS};
-use crate::profile_metadata::{
-    PluginScope, ProfileIndexEntry, ProfileMetadata, ProfileSource, ProfilesIndex,
+use crate::plugin::manifest::{FilterConfig, PluginManifest, DEFAULT_COMPONENT_DIRS};
+
+// Re-exports
+pub use fusion::{
+    CollectedFile, FusionConfig, FusionConflict, FusionExecutor, FusionPlan, FusionResult,
+    FusionSpec,
+};
+pub use metadata::{
+    migrate_existing_profiles, PluginConfig, PluginScope, ProfileIndexEntry, ProfileInfo,
+    ProfileMetadata, ProfileSource, ProfilesIndex,
 };
 
 const PROFILES_DIR: &str = "profiles";
@@ -276,6 +286,25 @@ impl Profile {
     /// Get profile description
     pub fn description(&self) -> Result<Option<String>> {
         Ok(self.metadata()?.and_then(|m| m.profile.description.clone()))
+    }
+
+    /// Get category store (builtin + profile overrides)
+    ///
+    /// Returns a CategoryStore with builtin categories, optionally
+    /// overridden by categories defined in `.dot-agent.toml`.
+    pub fn category_store(&self) -> Result<crate::category::CategoryStore> {
+        use crate::category::CategoryStore;
+
+        let store = CategoryStore::builtin();
+
+        // Apply profile-specific overrides if present
+        if let Some(metadata) = self.metadata()? {
+            if let Some(ref categories_config) = metadata.categories {
+                return Ok(store.with_config(categories_config));
+            }
+        }
+
+        Ok(store)
     }
 
     /// Check if profile has plugin features (hooks, MCP, LSP)

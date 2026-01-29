@@ -1,16 +1,13 @@
+pub mod category;
 pub mod channel;
 pub mod config;
 pub mod error;
-pub mod installer;
-pub mod json_merge;
-pub mod metadata;
+pub mod install;
+pub mod llm;
 pub mod platform;
-pub mod plugin_manifest;
-pub mod plugin_registrar;
+pub mod plugin;
 pub mod profile;
-pub mod profile_metadata;
 pub mod rule;
-pub mod snapshot;
 
 pub use channel::{
     Channel, ChannelManager, ChannelRef, ChannelRegistry, ChannelSource, ChannelType, Hub,
@@ -18,21 +15,27 @@ pub use channel::{
 };
 pub use config::Config;
 pub use error::{DotAgentError, Result};
-pub use installer::{DiffResult, FileInfo, FileStatus, InstallOptions, InstallResult, Installer};
-pub use json_merge::{
-    is_mergeable_json, merge_json, merge_json_file, unmerge_json, unmerge_json_file, MergeRecord,
-    MergeResult, UnmergeResult,
+pub use install::{
+    is_mergeable_json, merge_json, merge_json_file, unmerge_json, unmerge_json_file, DiffResult,
+    FileInfo, FileStatus, InstallOptions, InstallResult, Installer, MergeRecord, MergeResult,
+    Metadata, ProfileSnapshotManager, Snapshot, SnapshotDiff, SnapshotManager, SnapshotTrigger,
+    UnmergeResult,
 };
-pub use metadata::Metadata;
+pub use llm::{check_claude_cli, execute_claude, require_claude_cli, LlmConfig};
 pub use platform::{InstallTarget, Platform};
-pub use plugin_manifest::{FilterConfig, PluginManifest, DEFAULT_COMPONENT_DIRS};
-pub use plugin_registrar::{PluginRegistrar, PluginRegistrationResult};
-pub use profile::{IgnoreConfig, Profile, ProfileManager, DEFAULT_EXCLUDED_DIRS};
-pub use profile_metadata::{
-    migrate_existing_profiles, PluginConfig, PluginScope, ProfileIndexEntry, ProfileInfo,
-    ProfileMetadata, ProfileSource, ProfilesIndex,
+pub use plugin::{
+    FilterConfig, PluginManifest, PluginRegistrar, PluginRegistrationResult, DEFAULT_COMPONENT_DIRS,
+};
+pub use profile::{
+    migrate_existing_profiles, CollectedFile, FusionConfig, FusionConflict, FusionExecutor,
+    FusionPlan, FusionResult, FusionSpec, IgnoreConfig, PluginConfig, PluginScope, Profile,
+    ProfileIndexEntry, ProfileInfo, ProfileManager, ProfileMetadata, ProfileSource, ProfilesIndex,
+    DEFAULT_EXCLUDED_DIRS,
 };
 pub use rule::{extract_rule, generate_rule, ApplyResult, Rule, RuleExecutor, RuleManager};
-pub use snapshot::{
-    ProfileSnapshotManager, Snapshot, SnapshotDiff, SnapshotManager, SnapshotTrigger,
+
+// Category system
+pub use category::{
+    BuiltinCategory, CategoriesConfig, CategoryClassifier, CategoryConfigEntry, CategoryDef,
+    CategoryStore, ClassificationMode, ClassifiedProfile, FileClassification, BUILTIN_CATEGORIES,
 };

@@ -4,11 +4,10 @@
 //! They are applied to base profiles to create new customized profiles.
 
 use std::fs;
-use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use crate::error::{DotAgentError, Result};
+use crate::llm::{check_claude_cli, execute_claude};
 use crate::profile::{Profile, ProfileManager};
 
 const RULES_DIR: &str = "rules";
@@ -537,55 +536,6 @@ fn validate_profile(profile_path: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn check_claude_cli() -> bool {
-    Command::new("claude")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn execute_claude(working_dir: &Path, prompt: &str) -> Result<String> {
-    let mut cmd = Command::new("claude");
-    cmd.arg("--print");
-    cmd.arg("--dangerously-skip-permissions");
-    cmd.current_dir(working_dir);
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| DotAgentError::ClaudeExecutionFailed {
-            message: format!("Failed to spawn claude: {}", e),
-        })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .map_err(|e| DotAgentError::ClaudeExecutionFailed {
-                message: format!("Failed to write prompt: {}", e),
-            })?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| DotAgentError::ClaudeExecutionFailed {
-            message: format!("Execution failed: {}", e),
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DotAgentError::ClaudeExecutionFailed {
-            message: format!("Claude exited with error: {}", stderr),
-        });
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn apply_ai_output(profile_path: &Path, output: &str) -> Result<usize> {

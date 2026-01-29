@@ -104,6 +104,15 @@ pub enum DotAgentError {
 
     #[error("TOML parse error in {path}: {message}")]
     TomlError { path: PathBuf, message: String },
+
+    #[error("Category not found: {name}")]
+    CategoryNotFound { name: String },
+
+    #[error("Fusion conflict: {path} exists in multiple profiles")]
+    FusionConflict { path: PathBuf },
+
+    #[error("LLM classification failed: {message}")]
+    LlmClassificationFailed { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -134,6 +143,9 @@ impl DotAgentError {
             Self::ChannelNotFound { .. } => 22,
             Self::CannotRemoveBuiltinChannel { .. } => 23,
             Self::JsonParseError { .. } => 24,
+            Self::CategoryNotFound { .. } => 25,
+            Self::FusionConflict { .. } => 26,
+            Self::LlmClassificationFailed { .. } => 27,
             _ => 1,
         }
     }

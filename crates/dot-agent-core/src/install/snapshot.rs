@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::error::{DotAgentError, Result};
-use crate::metadata::compute_hash;
+
+use super::metadata::compute_hash;
 
 const TARGET_SNAPSHOTS_DIR: &str = "target-snapshots";
 const PROFILE_SNAPSHOTS_DIR: &str = "profile-snapshots";

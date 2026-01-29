@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{DotAgentError, Result};
+use crate::llm::LlmConfig;
 use crate::profile::{IgnoreConfig, DEFAULT_EXCLUDED_DIRS};
 
 const CONFIG_FILE: &str = "config.toml";
@@ -25,6 +26,12 @@ include = []
 
 # Default profile to use when none specified
 # default = "my-profile"
+
+[llm]
+# Enable LLM-powered features (category classification, etc.)
+# When enabled, uses Claude API for semantic classification
+# Default: false
+enabled = false
 "#;
 
 /// Global configuration
@@ -32,6 +39,9 @@ include = []
 pub struct Config {
     #[serde(default)]
     pub profile: ProfileConfig,
+
+    #[serde(default)]
+    pub llm: LlmConfig,
 }
 
 /// Profile-related configuration
@@ -121,6 +131,7 @@ impl Config {
             "profile.exclude" => Some(format!("{:?}", self.profile.exclude)),
             "profile.include" => Some(format!("{:?}", self.profile.include)),
             "profile.default" => self.profile.default.clone(),
+            "llm.enabled" => Some(self.llm.enabled.to_string()),
             _ => None,
         }
     }
@@ -143,6 +154,11 @@ impl Config {
                 } else {
                     Some(trimmed.to_string())
                 };
+                Ok(())
+            }
+            "llm.enabled" => {
+                let trimmed = value.trim().to_lowercase();
+                self.llm.enabled = matches!(trimmed.as_str(), "true" | "1" | "yes");
                 Ok(())
             }
             _ => Err(DotAgentError::ConfigKeyNotFound {
@@ -174,6 +190,7 @@ impl Config {
                     .clone()
                     .unwrap_or_else(|| "(not set)".to_string()),
             ),
+            ("llm.enabled".to_string(), self.llm.enabled.to_string()),
         ]
     }
 

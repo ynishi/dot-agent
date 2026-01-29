@@ -1,11 +1,26 @@
+pub mod json_merge;
+pub mod metadata;
+pub mod snapshot;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{DotAgentError, Result};
-use crate::json_merge::{is_mergeable_json, merge_json_file, unmerge_json_file};
-use crate::metadata::{compute_file_hash, compute_hash, Metadata};
 use crate::platform::Platform;
 use crate::profile::{IgnoreConfig, Profile};
+
+// Internal imports
+use metadata::{compute_file_hash, compute_hash};
+
+// Re-exports
+pub use json_merge::{
+    is_mergeable_json, merge_json, merge_json_file, unmerge_json, unmerge_json_file, MergeRecord,
+    MergeResult, UnmergeResult,
+};
+pub use metadata::Metadata;
+pub use snapshot::{
+    ProfileSnapshotManager, Snapshot, SnapshotDiff, SnapshotManager, SnapshotTrigger,
+};
 
 const CLAUDE_MD: &str = "CLAUDE.md";
 const CLAUDE_DIR: &str = ".claude";

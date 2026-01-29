@@ -400,6 +400,49 @@ pub enum Commands {
         action: SnapshotAction,
     },
 
+    /// Show category classification for a profile
+    Categories {
+        /// Profile name to classify
+        profile: String,
+
+        /// Show uncategorized files
+        #[arg(long)]
+        uncategorized: bool,
+
+        /// Filter by category name
+        #[arg(short, long)]
+        category: Option<String>,
+
+        /// Show detailed file list
+        #[arg(short, long)]
+        detailed: bool,
+    },
+
+    /// Fuse multiple profiles by category into a new profile
+    ///
+    /// Example: dot-agent fusion profile-a:plan profile-b:execute -o my-fused
+    Fusion {
+        /// Profile:category pairs (e.g., "superpowers:plan", "rust-tdd:execute")
+        #[arg(required = true)]
+        specs: Vec<String>,
+
+        /// Output profile name
+        #[arg(short, long, required = true)]
+        output: String,
+
+        /// Force overwrite if output profile exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// Dry run (show what would be copied)
+        #[arg(short, long)]
+        dry_run: bool,
+
+        /// Include uncategorized files from first profile
+        #[arg(long)]
+        include_uncategorized: bool,
+    },
+
     /// Switch to a different profile (remove current, install new)
     Switch {
         /// Profile name to switch to

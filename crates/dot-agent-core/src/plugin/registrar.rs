@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::error::{DotAgentError, Result};
-use crate::profile_metadata::{PluginScope, ProfileMetadata};
+use crate::profile::{PluginScope, ProfileMetadata};
 
 /// Plugin-related files/directories that trigger registration
 const PLUGIN_HOOKS_DIR: &str = "hooks";
