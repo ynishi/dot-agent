@@ -1488,6 +1488,35 @@ fn handle_install(
         });
     }
 
+    // Record operation in history (if not dry run)
+    if !dry_run {
+        use dot_agent_core::{HistoryManager, InstallOperationOptions, OperationType};
+
+        if let Ok(mut history_manager) = HistoryManager::new(base_dir.to_path_buf()) {
+            for (_, target_dir) in &install_targets {
+                let op_type = OperationType::Install {
+                    profile: actual_profile_name.clone(),
+                    source: None,
+                    target: target_dir.clone(),
+                    options: InstallOperationOptions {
+                        force,
+                        dry_run: false,
+                        no_prefix,
+                        no_merge,
+                    },
+                };
+
+                if let Ok(op) = history_manager.record_operation(op_type, target_dir) {
+                    println!(
+                        "{} Recorded: {}",
+                        "[HISTORY]".dimmed(),
+                        op.id.as_str().dimmed()
+                    );
+                }
+            }
+        }
+    }
+
     println!();
     println!("{}", "Installation complete!".green());
 
@@ -1562,6 +1591,28 @@ fn handle_upgrade(
             skipped
         );
         println!("         Use --force to overwrite, or review with 'dot-agent diff'");
+    }
+
+    // Record operation in history (if not dry run)
+    if !dry_run && (updated > 0 || new > 0) {
+        use dot_agent_core::{HistoryManager, OperationType};
+
+        if let Ok(mut history_manager) = HistoryManager::new(base_dir.to_path_buf()) {
+            let op_type = OperationType::Upgrade {
+                profile: profile_name.to_string(),
+                source: None,
+                target: target_dir.clone(),
+                from_checkpoint: None,
+            };
+
+            if let Ok(op) = history_manager.record_operation(op_type, &target_dir) {
+                println!(
+                    "{} Recorded: {}",
+                    "[HISTORY]".dimmed(),
+                    op.id.as_str().dimmed()
+                );
+            }
+        }
     }
 
     Ok(())
@@ -1704,6 +1755,27 @@ fn handle_remove(
         println!("  Unmerged: {}", unmerged);
     }
     println!("  Kept: {} (user files)", kept);
+
+    // Record operation in history (if not dry run)
+    if !dry_run && removed > 0 {
+        use dot_agent_core::{HistoryManager, OperationType};
+
+        if let Ok(mut history_manager) = HistoryManager::new(base_dir.to_path_buf()) {
+            let op_type = OperationType::Remove {
+                profile: profile_name.to_string(),
+                target: target_dir.clone(),
+            };
+
+            if let Ok(op) = history_manager.record_operation(op_type, &target_dir) {
+                println!(
+                    "{} Recorded: {}",
+                    "[HISTORY]".dimmed(),
+                    op.id.as_str().dimmed()
+                );
+            }
+        }
+    }
+
     println!();
     println!("{}", "Removal complete.".green());
 
