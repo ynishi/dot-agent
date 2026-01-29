@@ -389,6 +389,16 @@ fn handle_search(
                 .map(|c| c.name.clone())
                 .collect()
         }
+        "codex" | "cx" => {
+            // Filter to all codex catalog channels
+            manager
+                .registry()
+                .list_enabled()
+                .iter()
+                .filter(|c| c.channel_type == ChannelType::CodexCatalog)
+                .map(|c| c.name.clone())
+                .collect()
+        }
         other => vec![other.to_string()],
     };
 
@@ -439,6 +449,7 @@ fn handle_search(
             ChannelType::GitHubGlobal => "[GH]".green(),
             ChannelType::AwesomeList => "[AL]".blue(),
             ChannelType::Marketplace => "[MP]".magenta(),
+            ChannelType::CodexCatalog => "[CX]".cyan(),
             _ => "[??]".dimmed(),
         };
 
@@ -783,6 +794,64 @@ fn handle_channel(action: ChannelAction, base_dir: &Path) -> Result<()> {
                                     }
                                     println!();
                                     println!("{} {}", "Total:".dimmed(), plugins.len());
+                                }
+                            }
+                        } else {
+                            println!("  {}", "(no cached data)".dimmed());
+                        }
+                    }
+                    ChannelType::CodexCatalog => {
+                        let manager = ChannelManager::new(base_dir.to_path_buf())?;
+                        let cache_dir = ChannelRegistry::cache_dir(base_dir, &channel_name);
+                        let cache_file = cache_dir.join("codex_catalog.json");
+
+                        // Auto-refresh if cache doesn't exist
+                        if !cache_file.exists() {
+                            println!("{}", "Fetching Codex skills catalog...".dimmed());
+                            manager.refresh_channel(&channel_name)?;
+                        }
+
+                        if let Ok(content) = std::fs::read_to_string(&cache_file) {
+                            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Some(skills) = data.get("skills").and_then(|s| s.as_array())
+                                {
+                                    // Group by category
+                                    let mut by_category: std::collections::HashMap<
+                                        String,
+                                        Vec<&serde_json::Value>,
+                                    > = std::collections::HashMap::new();
+                                    for skill in skills {
+                                        let category = skill
+                                            .get("category")
+                                            .and_then(|c| c.as_str())
+                                            .unwrap_or("unknown");
+                                        by_category
+                                            .entry(category.to_string())
+                                            .or_default()
+                                            .push(skill);
+                                    }
+
+                                    // Display in order: .system, .curated, .experimental
+                                    for category in &[".system", ".curated", ".experimental"] {
+                                        if let Some(cat_skills) = by_category.get(*category) {
+                                            let display_name = match *category {
+                                                ".system" => "System Skills (preinstalled)",
+                                                ".curated" => "Curated Skills",
+                                                ".experimental" => "Experimental Skills",
+                                                _ => *category,
+                                            };
+                                            println!("  {}:", display_name.yellow());
+                                            for skill in cat_skills {
+                                                let name = skill
+                                                    .get("name")
+                                                    .and_then(|n| n.as_str())
+                                                    .unwrap_or("(unknown)");
+                                                println!("    {}", name.cyan());
+                                            }
+                                            println!();
+                                        }
+                                    }
+                                    println!("{} {}", "Total:".dimmed(), skills.len());
                                 }
                             }
                         } else {

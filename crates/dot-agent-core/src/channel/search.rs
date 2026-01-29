@@ -13,6 +13,19 @@ use crate::error::{DotAgentError, Result};
 use super::channel_registry::ChannelRegistry;
 use super::types::{Channel, ChannelSource, ChannelType, ProfileRef, SearchOptions};
 
+/// A skill entry from OpenAI Codex Skills Catalog
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexSkill {
+    /// Skill name (directory name)
+    pub name: String,
+    /// Skill category (.system, .curated, .experimental)
+    pub category: String,
+    /// Full path within repo (e.g., "skills/.curated/pdf")
+    pub path: String,
+    /// Description from SKILL.md frontmatter (if fetched)
+    pub description: Option<String>,
+}
+
 /// A plugin entry from a Claude Code Plugin Marketplace
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplacePlugin {
@@ -257,6 +270,7 @@ impl ChannelManager {
             ChannelType::GitHubGlobal => self.search_github(channel, query, options),
             ChannelType::AwesomeList => self.search_awesome_list(channel, query, options),
             ChannelType::Marketplace => self.search_marketplace(channel, query, options),
+            ChannelType::CodexCatalog => self.search_codex_catalog(channel, query, options),
             ChannelType::Hub | ChannelType::Direct => {
                 // Not searchable
                 Ok(Vec::new())
@@ -599,6 +613,9 @@ impl ChannelManager {
             ChannelSource::Marketplace { repo } => {
                 self.fetch_marketplace_catalog(repo, channel_name)?;
             }
+            ChannelSource::CodexCatalog { repo, base_path } => {
+                self.fetch_codex_catalog(repo, base_path, channel_name)?;
+            }
             _ => {
                 if let Some(url) = channel.source.url() {
                     // Try main first, then master
@@ -788,6 +805,220 @@ impl ChannelManager {
         }
 
         Ok(results)
+    }
+
+    /// Fetch Codex skills catalog from GitHub repository using GitHub API
+    ///
+    /// Scans directory structure like Codex CLI's $skill-installer does:
+    /// - skills/.system (preinstalled system skills)
+    /// - skills/.curated (recommended skills)
+    /// - skills/.experimental (experimental skills)
+    fn fetch_codex_catalog(&self, repo: &str, base_path: &str, channel_name: &str) -> Result<()> {
+        let repo = Self::normalize_repo(repo);
+
+        // Categories to scan (matching Codex CLI's structure)
+        let categories = [".system", ".curated", ".experimental"];
+        let mut all_skills: Vec<CodexSkill> = Vec::new();
+
+        for category in &categories {
+            let path = format!("{}/{}", base_path, category);
+            match self.fetch_github_directory_contents(&repo, &path) {
+                Ok(skills) => {
+                    for skill_name in skills {
+                        all_skills.push(CodexSkill {
+                            name: skill_name.clone(),
+                            category: category.to_string(),
+                            path: format!("{}/{}", path, skill_name),
+                            description: None,
+                        });
+                    }
+                }
+                Err(e) => {
+                    // Log but continue - some categories may not exist
+                    eprintln!("Warning: Failed to fetch {}/{}: {}", repo, path, e);
+                }
+            }
+        }
+
+        if all_skills.is_empty() {
+            return Err(DotAgentError::GitHubApiError {
+                message: format!(
+                    "No skills found in {}/{} (tried .system, .curated, .experimental)",
+                    repo, base_path
+                ),
+            });
+        }
+
+        // Cache the catalog as JSON
+        let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
+        std::fs::create_dir_all(&cache_dir)?;
+
+        let catalog = serde_json::json!({
+            "repo": repo,
+            "base_path": base_path,
+            "skills": all_skills,
+            "fetched_at": chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        });
+
+        std::fs::write(
+            cache_dir.join("codex_catalog.json"),
+            serde_json::to_string_pretty(&catalog).map_err(|e| DotAgentError::GitHubApiError {
+                message: format!("Failed to serialize catalog: {}", e),
+            })?,
+        )?;
+
+        Ok(())
+    }
+
+    /// Fetch directory contents from GitHub API
+    /// Returns list of directory names (skills)
+    fn fetch_github_directory_contents(&self, repo: &str, path: &str) -> Result<Vec<String>> {
+        // Use gh CLI for GitHub API access
+        if !Self::check_gh_available() {
+            return Err(DotAgentError::GitHubCliNotFound);
+        }
+
+        let api_path = format!("repos/{}/contents/{}", repo, path);
+        let output = Command::new("gh")
+            .args([
+                "api",
+                &api_path,
+                "--jq",
+                "[.[] | select(.type == \"dir\") | .name]",
+            ])
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    DotAgentError::GitHubCliNotFound
+                } else {
+                    DotAgentError::Io(e)
+                }
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(DotAgentError::GitHubApiError {
+                message: format!("GitHub API error for {}/{}: {}", repo, path, stderr),
+            });
+        }
+
+        let json: Vec<String> =
+            serde_json::from_slice(&output.stdout).map_err(|e| DotAgentError::GitHubApiError {
+                message: format!("Invalid JSON response: {}", e),
+            })?;
+
+        Ok(json)
+    }
+
+    /// Search a Codex Catalog channel
+    fn search_codex_catalog(
+        &self,
+        channel: &Channel,
+        query: &str,
+        options: &SearchOptions,
+    ) -> Result<Vec<ProfileRef>> {
+        let (repo, base_path) = match &channel.source {
+            ChannelSource::CodexCatalog { repo, base_path } => (repo.clone(), base_path.clone()),
+            _ => return Ok(Vec::new()),
+        };
+
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::new();
+
+        // Check if catalog is cached
+        let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, &channel.name);
+        let cache_file = cache_dir.join("codex_catalog.json");
+
+        // Auto-fetch if cache doesn't exist
+        if !cache_file.exists() {
+            self.fetch_codex_catalog(&repo, &base_path, &channel.name)?;
+        }
+
+        // Parse cached catalog
+        if let Ok(content) = std::fs::read_to_string(&cache_file) {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(skills) = data.get("skills").and_then(|s| s.as_array()) {
+                    for skill in skills {
+                        let name = skill
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or_default();
+                        let category = skill
+                            .get("category")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or_default();
+                        let path = skill
+                            .get("path")
+                            .and_then(|p| p.as_str())
+                            .unwrap_or_default();
+                        let description = skill
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("");
+
+                        // Filter by query
+                        let text = format!("{} {} {}", name, category, description).to_lowercase();
+                        if query.is_empty() || text.contains(&query_lower) {
+                            let mut metadata = HashMap::new();
+                            metadata.insert("category".to_string(), category.to_string());
+                            metadata.insert("path".to_string(), path.to_string());
+
+                            results.push(ProfileRef {
+                                id: format!("codex:{}@{}", name, channel.name),
+                                name: name.to_string(),
+                                owner: repo.split('/').next().unwrap_or("openai").to_string(),
+                                description: if description.is_empty() {
+                                    format!("Codex skill ({})", category.trim_start_matches('.'))
+                                } else {
+                                    description.to_string()
+                                },
+                                url: format!("https://github.com/{}/tree/main/{}", repo, path),
+                                stars: None,
+                                channel: channel.name.clone(),
+                                metadata,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply limit
+        if options.limit > 0 {
+            results.truncate(options.limit);
+        }
+
+        Ok(results)
+    }
+
+    /// Get Codex skills from cached catalog
+    pub fn get_codex_skills(&self, channel_name: &str) -> Result<Vec<CodexSkill>> {
+        let cache_dir = ChannelRegistry::cache_dir(&self.base_dir, channel_name);
+        let cache_file = cache_dir.join("codex_catalog.json");
+
+        if !cache_file.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = std::fs::read_to_string(&cache_file)?;
+        let data: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| DotAgentError::GitHubApiError {
+                message: format!("Invalid codex_catalog.json: {}", e),
+            })?;
+
+        let skills = data
+            .get("skills")
+            .and_then(|s| s.as_array())
+            .ok_or_else(|| DotAgentError::GitHubApiError {
+                message: "codex_catalog.json has no skills array".to_string(),
+            })?;
+
+        let result: Vec<CodexSkill> = skills
+            .iter()
+            .filter_map(|s| serde_json::from_value(s.clone()).ok())
+            .collect();
+
+        Ok(result)
     }
 }
 

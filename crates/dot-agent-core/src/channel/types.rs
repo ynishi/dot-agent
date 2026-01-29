@@ -82,8 +82,10 @@ pub enum ChannelType {
     Hub,
     /// Direct URL (GitHub repo, etc.)
     Direct,
-    /// Claude Code Plugin Marketplace
+    /// Claude Code Plugin Marketplace (.claude-plugin/marketplace.json)
     Marketplace,
+    /// OpenAI Codex Skills Catalog (GitHub directory scan)
+    CodexCatalog,
 }
 
 impl ChannelType {
@@ -94,6 +96,7 @@ impl ChannelType {
             Self::Hub => "hub",
             Self::Direct => "direct",
             Self::Marketplace => "marketplace",
+            Self::CodexCatalog => "codex-catalog",
         }
     }
 
@@ -101,7 +104,7 @@ impl ChannelType {
     pub fn is_searchable(&self) -> bool {
         matches!(
             self,
-            Self::GitHubGlobal | Self::AwesomeList | Self::Marketplace
+            Self::GitHubGlobal | Self::AwesomeList | Self::Marketplace | Self::CodexCatalog
         )
     }
 }
@@ -142,6 +145,13 @@ pub enum ChannelSource {
         /// GitHub repo (e.g., "anthropics/claude-plugins-official")
         repo: String,
     },
+    /// OpenAI Codex Skills Catalog (GitHub directory scan)
+    CodexCatalog {
+        /// GitHub repo (e.g., "openai/skills")
+        repo: String,
+        /// Base path within the repo (e.g., "skills")
+        base_path: String,
+    },
 }
 
 impl ChannelSource {
@@ -176,6 +186,14 @@ impl ChannelSource {
         Self::Marketplace { repo: repo.into() }
     }
 
+    /// Create a Codex Catalog source
+    pub fn codex_catalog(repo: impl Into<String>, base_path: impl Into<String>) -> Self {
+        Self::CodexCatalog {
+            repo: repo.into(),
+            base_path: base_path.into(),
+        }
+    }
+
     /// Get the URL if available
     pub fn url(&self) -> Option<&str> {
         match self {
@@ -184,13 +202,23 @@ impl ChannelSource {
             Self::Url { url } => Some(url),
             Self::Anonymous { url, .. } => Some(url),
             Self::Marketplace { .. } => None,
+            Self::CodexCatalog { .. } => None,
         }
     }
 
-    /// Get the GitHub repo if marketplace
+    /// Get the GitHub repo if marketplace or codex catalog
     pub fn repo(&self) -> Option<&str> {
         match self {
             Self::Marketplace { repo } => Some(repo),
+            Self::CodexCatalog { repo, .. } => Some(repo),
+            _ => None,
+        }
+    }
+
+    /// Get the base path for codex catalog
+    pub fn codex_base_path(&self) -> Option<&str> {
+        match self {
+            Self::CodexCatalog { base_path, .. } => Some(base_path),
             _ => None,
         }
     }
@@ -315,11 +343,17 @@ impl Channel {
     }
 
     /// Create the builtin Codex Skills Catalog channel (openai/skills)
+    ///
+    /// Uses GitHub API to scan directory structure, matching how Codex CLI's
+    /// $skill-installer works. Skills are organized in:
+    /// - skills/.system (preinstalled)
+    /// - skills/.curated (recommended)
+    /// - skills/.experimental (experimental)
     pub fn codex_skills() -> Self {
         Self {
             name: "codex".to_string(),
-            channel_type: ChannelType::Marketplace,
-            source: ChannelSource::marketplace("openai/skills"),
+            channel_type: ChannelType::CodexCatalog,
+            source: ChannelSource::codex_catalog("openai/skills", "skills"),
             description: Some("OpenAI Codex CLI Skills Catalog".to_string()),
             added_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             enabled: true,
