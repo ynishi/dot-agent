@@ -443,6 +443,12 @@ pub enum Commands {
         include_uncategorized: bool,
     },
 
+    /// Manage operation history and rollback
+    History {
+        #[command(subcommand)]
+        action: HistoryAction,
+    },
+
     /// Switch to a different profile (remove current, install new)
     Switch {
         /// Profile name to switch to
@@ -956,5 +962,73 @@ pub enum ChannelAction {
     Refresh {
         /// Channel name (refresh all if not specified)
         name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HistoryAction {
+    /// Show operation history
+    List {
+        /// Number of entries to show (default: 10)
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+
+        /// Base directory (default: ~/.dot-agent)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Use ~/.claude directly (ignores --path)
+        #[arg(short, long)]
+        global: bool,
+    },
+
+    /// Show details of a specific operation
+    Show {
+        /// Operation ID
+        id: String,
+    },
+
+    /// Rollback to a specific operation (undo all operations after it)
+    Rollback {
+        /// Operation ID to rollback to
+        id: String,
+
+        /// Base directory (installs to <path>/.claude, default: current dir)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Rollback ~/.claude directly (ignores --path)
+        #[arg(short, long)]
+        global: bool,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+
+        /// Dry run (show what would be restored)
+        #[arg(short, long)]
+        dry_run: bool,
+    },
+
+    /// Sync: detect and record user edits
+    Sync {
+        /// Base directory (installs to <path>/.claude, default: current dir)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Sync ~/.claude directly (ignores --path)
+        #[arg(short, long)]
+        global: bool,
+    },
+
+    /// Prune old checkpoints
+    Prune {
+        /// Number of checkpoints to keep (default: 20)
+        #[arg(short, long, default_value = "20")]
+        keep: usize,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
     },
 }

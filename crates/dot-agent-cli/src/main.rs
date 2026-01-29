@@ -15,8 +15,8 @@ use dot_agent_core::{DotAgentError, Metadata, Result};
 
 mod args;
 use args::{
-    ChannelAction, Cli, Commands, ConfigAction, HubAction, ProfileAction, ProfileSnapshotAction,
-    RuleAction, Shell, SnapshotAction,
+    ChannelAction, Cli, Commands, ConfigAction, HistoryAction, HubAction, ProfileAction,
+    ProfileSnapshotAction, RuleAction, Shell, SnapshotAction,
 };
 
 #[cfg(feature = "gui")]
@@ -252,6 +252,7 @@ fn main() -> ExitCode {
                 target,
             )
         }
+        Some(Commands::History { action }) => handle_history(action, &base_dir),
         None => {
             Cli::command().print_help().ok();
             Ok(())
@@ -3475,4 +3476,287 @@ fn handle_fusion(
     }
 
     Ok(())
+}
+
+fn handle_history(action: HistoryAction, base_dir: &Path) -> Result<()> {
+    use dot_agent_core::HistoryManager;
+
+    let mut history_manager = HistoryManager::new(base_dir.to_path_buf())?;
+
+    match action {
+        HistoryAction::List {
+            limit,
+            path,
+            global,
+        } => {
+            let target = if global {
+                dirs::home_dir()
+                    .ok_or(DotAgentError::HomeNotFound)?
+                    .join(".claude")
+            } else {
+                path.unwrap_or_else(|| std::env::current_dir().unwrap())
+                    .join(".claude")
+            };
+
+            // Initialize cache if not already done
+            if target.exists() {
+                let _ = history_manager.init_cache(&target);
+            }
+
+            let entries = history_manager.list_history(Some(limit));
+
+            if entries.is_empty() {
+                println!("No operations recorded yet.");
+                return Ok(());
+            }
+
+            println!("{}", "Operation History".bold());
+            println!("{}", "=".repeat(60));
+
+            for entry in entries {
+                let auto_marker = if entry.is_auto_detected {
+                    " (auto)".dimmed()
+                } else {
+                    "".normal()
+                };
+
+                println!(
+                    "{} {} {}{}",
+                    entry.id.cyan(),
+                    entry
+                        .timestamp
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                        .dimmed(),
+                    entry.summary,
+                    auto_marker
+                );
+            }
+
+            Ok(())
+        }
+
+        HistoryAction::Show { id } => {
+            let operation = history_manager
+                .get_operation(&id)
+                .ok_or_else(|| DotAgentError::OperationNotFound { id: id.clone() })?;
+
+            println!("{}", "Operation Details".bold());
+            println!("{}", "=".repeat(60));
+            println!("ID:          {}", operation.id.as_str().cyan());
+            println!(
+                "Timestamp:   {}",
+                operation.timestamp.format("%Y-%m-%d %H:%M:%S")
+            );
+            println!("Summary:     {}", operation.summary());
+            println!("Checkpoint:  {}", operation.checkpoint_id);
+
+            if let Some(parent) = &operation.parent {
+                println!("Parent:      {}", parent.as_str());
+            }
+
+            if let Some(desc) = &operation.description {
+                println!("Description: {}", desc);
+            }
+
+            // Show operation type details
+            println!();
+            println!("{}", "Type Details".bold());
+            match &operation.operation_type {
+                dot_agent_core::OperationType::Install {
+                    profile, target, ..
+                } => {
+                    println!("  Type:    Install");
+                    println!("  Profile: {}", profile);
+                    println!("  Target:  {}", target.display());
+                }
+                dot_agent_core::OperationType::Remove { profile, target } => {
+                    println!("  Type:    Remove");
+                    println!("  Profile: {}", profile);
+                    println!("  Target:  {}", target.display());
+                }
+                dot_agent_core::OperationType::Upgrade {
+                    profile, target, ..
+                } => {
+                    println!("  Type:    Upgrade");
+                    println!("  Profile: {}", profile);
+                    println!("  Target:  {}", target.display());
+                }
+                dot_agent_core::OperationType::Fusion {
+                    inputs,
+                    output_profile,
+                } => {
+                    println!("  Type:    Fusion");
+                    println!("  Inputs:");
+                    for input in inputs {
+                        if let Some(cat) = &input.category {
+                            println!("    - {}:{}", input.profile, cat);
+                        } else {
+                            println!("    - {}", input.profile);
+                        }
+                    }
+                    println!("  Output:  {}", output_profile);
+                }
+                dot_agent_core::OperationType::RuleApply {
+                    rule_name,
+                    source_profile,
+                    output_profile,
+                } => {
+                    println!("  Type:    Rule Apply");
+                    println!("  Rule:    {}", rule_name);
+                    println!("  Source:  {}", source_profile);
+                    println!("  Output:  {}", output_profile);
+                }
+                dot_agent_core::OperationType::UserEdit {
+                    target,
+                    files_changed,
+                    auto_detected,
+                } => {
+                    println!("  Type:    User Edit");
+                    println!("  Target:  {}", target.display());
+                    println!("  Auto:    {}", if *auto_detected { "Yes" } else { "No" });
+                    println!("  Files changed: {}", files_changed.len());
+                    for file in files_changed.iter().take(10) {
+                        println!("    - {}", file);
+                    }
+                    if files_changed.len() > 10 {
+                        println!("    ... and {} more", files_changed.len() - 10);
+                    }
+                }
+                dot_agent_core::OperationType::ManualSnapshot {
+                    target,
+                    description,
+                } => {
+                    println!("  Type:    Manual Snapshot");
+                    println!("  Target:  {}", target.display());
+                    if let Some(desc) = description {
+                        println!("  Note:    {}", desc);
+                    }
+                }
+            }
+
+            Ok(())
+        }
+
+        HistoryAction::Rollback {
+            id,
+            path,
+            global,
+            force,
+            dry_run,
+        } => {
+            let target = if global {
+                dirs::home_dir()
+                    .ok_or(DotAgentError::HomeNotFound)?
+                    .join(".claude")
+            } else {
+                path.unwrap_or_else(|| std::env::current_dir().unwrap())
+                    .join(".claude")
+            };
+
+            // Get operation details first
+            let operation = history_manager
+                .get_operation(&id)
+                .ok_or_else(|| DotAgentError::OperationNotFound { id: id.clone() })?;
+
+            println!("{}", "Rollback Operation".bold());
+            println!("{}", "=".repeat(60));
+            println!("Rolling back to: {} - {}", id.cyan(), operation.summary());
+            println!("Target: {}", target.display());
+
+            if dry_run {
+                println!();
+                println!("{}", "[DRY RUN] No changes will be made.".yellow());
+                return Ok(());
+            }
+
+            if !force {
+                print!("Continue? [y/N] ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            let result = history_manager.rollback(&id, &target)?;
+
+            println!();
+            println!(
+                "{} Rolled back to {}",
+                "[OK]".green().bold(),
+                result.restored_to.cyan()
+            );
+            println!("Operations undone: {}", result.operations_undone);
+
+            Ok(())
+        }
+
+        HistoryAction::Sync { path, global } => {
+            let target = if global {
+                dirs::home_dir()
+                    .ok_or(DotAgentError::HomeNotFound)?
+                    .join(".claude")
+            } else {
+                path.unwrap_or_else(|| std::env::current_dir().unwrap())
+                    .join(".claude")
+            };
+
+            if !target.exists() {
+                println!("Target directory does not exist: {}", target.display());
+                return Ok(());
+            }
+
+            println!("Syncing changes from: {}", target.display());
+
+            // Initialize cache if needed
+            history_manager.init_cache(&target)?;
+
+            // Detect and record changes
+            match history_manager.sync(&target)? {
+                Some(operation) => {
+                    println!(
+                        "{} Recorded user edit: {}",
+                        "[OK]".green().bold(),
+                        operation.summary()
+                    );
+                }
+                None => {
+                    println!("No changes detected.");
+                }
+            }
+
+            Ok(())
+        }
+
+        HistoryAction::Prune { keep, force } => {
+            println!("Pruning old checkpoints, keeping {} most recent...", keep);
+
+            if !force {
+                print!("Continue? [y/N] ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            let removed = history_manager.prune_checkpoints(keep)?;
+            println!(
+                "{} Removed {} old checkpoints",
+                "[OK]".green().bold(),
+                removed
+            );
+
+            Ok(())
+        }
+    }
 }

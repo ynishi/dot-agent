@@ -2,6 +2,7 @@ pub mod category;
 pub mod channel;
 pub mod config;
 pub mod error;
+pub mod history;
 pub mod install;
 pub mod llm;
 pub mod platform;
@@ -38,4 +39,11 @@ pub use rule::{extract_rule, generate_rule, ApplyResult, Rule, RuleExecutor, Rul
 pub use category::{
     BuiltinCategory, CategoriesConfig, CategoryClassifier, CategoryConfigEntry, CategoryDef,
     CategoryStore, ClassificationMode, ClassifiedProfile, FileClassification, BUILTIN_CATEGORIES,
+};
+
+// History system
+pub use history::{
+    ChangeDetectionResult, Checkpoint, CheckpointManager, Delta, DeltaEntry, DeltaType,
+    HistoryEntry, HistoryManager, Operation, OperationGraph, OperationId, OperationType,
+    RollbackResult, SourceInfo,
 };

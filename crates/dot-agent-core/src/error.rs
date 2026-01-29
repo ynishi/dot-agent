@@ -113,6 +113,18 @@ pub enum DotAgentError {
 
     #[error("LLM classification failed: {message}")]
     LlmClassificationFailed { message: String },
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    #[error("Operation not found: {id}")]
+    OperationNotFound { id: String },
+
+    #[error("Checkpoint not found: {id}")]
+    CheckpointNotFound { id: String },
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -146,6 +158,10 @@ impl DotAgentError {
             Self::CategoryNotFound { .. } => 25,
             Self::FusionConflict { .. } => 26,
             Self::LlmClassificationFailed { .. } => 27,
+            Self::Internal(_) => 28,
+            Self::NotFound(_) => 29,
+            Self::OperationNotFound { .. } => 30,
+            Self::CheckpointNotFound { .. } => 31,
             _ => 1,
         }
     }
