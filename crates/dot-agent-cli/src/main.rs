@@ -3892,5 +3892,138 @@ fn handle_history(action: HistoryAction, base_dir: &Path) -> Result<()> {
 
             Ok(())
         }
+
+        HistoryAction::Graph {
+            limit,
+            profile,
+            compact,
+        } => {
+            let graph = history_manager.graph();
+            let mut ops = graph.operations_reverse_chronological();
+
+            // Filter by profile if specified
+            if let Some(ref profile_filter) = profile {
+                ops.retain(|op| match &op.operation_type {
+                    dot_agent_core::OperationType::Install { profile, .. } => {
+                        profile == profile_filter
+                    }
+                    dot_agent_core::OperationType::Remove { profile, .. } => {
+                        profile == profile_filter
+                    }
+                    dot_agent_core::OperationType::Upgrade { profile, .. } => {
+                        profile == profile_filter
+                    }
+                    dot_agent_core::OperationType::Fusion { output_profile, .. } => {
+                        output_profile == profile_filter
+                    }
+                    dot_agent_core::OperationType::RuleApply {
+                        source_profile,
+                        output_profile,
+                        ..
+                    } => source_profile == profile_filter || output_profile == profile_filter,
+                    _ => true,
+                });
+            }
+
+            // Limit results
+            ops.truncate(limit);
+
+            if ops.is_empty() {
+                println!("No operations found.");
+                return Ok(());
+            }
+
+            println!("{}", "Operation Graph".bold());
+            println!("{}", "═".repeat(70));
+            println!();
+
+            // Build parent-child relationships for visualization
+            let mut displayed = std::collections::HashSet::new();
+
+            for (idx, op) in ops.iter().enumerate() {
+                let is_head = idx == 0;
+                let has_parent = op.parent.is_some();
+                let is_auto = op.is_auto_detected();
+
+                // Tree branch characters
+                let branch = if is_head {
+                    "●".green().bold()
+                } else if has_parent {
+                    "├".dimmed()
+                } else {
+                    "◯".cyan()
+                };
+
+                let connector = if idx < ops.len() - 1 { "│" } else { " " };
+
+                // Format timestamp
+                let time_str = op.timestamp.format("%m-%d %H:%M").to_string();
+
+                // Format operation ID (shortened)
+                let short_id = &op.id.as_str()[..std::cmp::min(12, op.id.as_str().len())];
+
+                if compact {
+                    // Compact view: single line
+                    let auto_marker = if is_auto { " ⚡" } else { "" };
+                    println!(
+                        "{} {} {} {}{}",
+                        branch,
+                        short_id.cyan(),
+                        time_str.dimmed(),
+                        op.summary(),
+                        auto_marker.yellow()
+                    );
+                } else {
+                    // Detailed view
+                    println!("{} {} {}", branch, short_id.cyan(), time_str.dimmed());
+                    println!("{}   {}", connector.dimmed(), op.summary());
+
+                    // Show parent relationship
+                    if let Some(ref parent_id) = op.parent {
+                        let parent_short =
+                            &parent_id.as_str()[..std::cmp::min(12, parent_id.as_str().len())];
+                        println!(
+                            "{}   {} {}",
+                            connector.dimmed(),
+                            "← parent:".dimmed(),
+                            parent_short.dimmed()
+                        );
+                    }
+
+                    if is_auto {
+                        println!("{}   {}", connector.dimmed(), "⚡ auto-detected".yellow());
+                    }
+
+                    println!("{}", connector.dimmed());
+                }
+
+                displayed.insert(op.id.as_str().to_string());
+            }
+
+            // Summary
+            println!("{}", "═".repeat(70));
+            println!(
+                "Total: {} operations{}",
+                ops.len(),
+                profile
+                    .map(|p| format!(" (filtered by: {})", p))
+                    .unwrap_or_default()
+            );
+
+            // Show legend
+            if !compact {
+                println!();
+                println!("{}", "Legend:".dimmed());
+                println!(
+                    "  {} HEAD (latest)  {} root  {} branch  {} auto-detected",
+                    "●".green(),
+                    "◯".cyan(),
+                    "├".dimmed(),
+                    "⚡".yellow()
+                );
+            }
+
+            Ok(())
+        }
     }
 }

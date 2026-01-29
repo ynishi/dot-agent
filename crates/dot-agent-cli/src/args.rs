@@ -1031,4 +1031,19 @@ pub enum HistoryAction {
         #[arg(short, long)]
         force: bool,
     },
+
+    /// Show operation history as a graph (DAG visualization)
+    Graph {
+        /// Number of operations to show (default: 20)
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Show only operations for a specific profile
+        #[arg(short, long)]
+        profile: Option<String>,
+
+        /// Show compact view (no details)
+        #[arg(short, long)]
+        compact: bool,
+    },
 }
