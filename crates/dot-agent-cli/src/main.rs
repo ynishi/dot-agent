@@ -2737,6 +2737,30 @@ fn handle_rule(action: RuleAction, base_dir: &Path) -> Result<()> {
             println!("New profile created: {}", result.new_profile_name.cyan());
             println!("  Path: {}", result.new_profile_path.display());
             println!("  Files modified: {}", result.files_modified);
+
+            // Record rule apply operation in history
+            {
+                use dot_agent_core::{HistoryManager, OperationType};
+
+                if let Ok(mut history_manager) = HistoryManager::new(base_dir.to_path_buf()) {
+                    let op_type = OperationType::RuleApply {
+                        rule_name: rule.clone(),
+                        source_profile: profile.clone(),
+                        output_profile: result.new_profile_name.clone(),
+                    };
+
+                    if let Ok(op) =
+                        history_manager.record_operation(op_type, &result.new_profile_path)
+                    {
+                        println!(
+                            "{} Recorded: {}",
+                            "[HISTORY]".dimmed(),
+                            op.id.as_str().dimmed()
+                        );
+                    }
+                }
+            }
+
             println!();
             println!(
                 "Install with: {}",
@@ -3545,6 +3569,44 @@ fn handle_fusion(
     println!("Contributions:");
     for (profile, count) in &result.contributions {
         println!("  {} {} files", profile.green(), count);
+    }
+
+    // Record fusion operation in history
+    {
+        use dot_agent_core::{FusionInput, HistoryManager, OperationType};
+
+        if let Ok(mut history_manager) = HistoryManager::new(base_dir.to_path_buf()) {
+            let inputs: Vec<FusionInput> = specs
+                .iter()
+                .filter_map(|s| {
+                    let parts: Vec<&str> = s.splitn(2, ':').collect();
+                    if parts.len() >= 1 {
+                        Some(FusionInput {
+                            profile: parts[0].to_string(),
+                            category: parts.get(1).map(|s| s.to_string()),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let op_type = OperationType::Fusion {
+                inputs,
+                output_profile: output_name.to_string(),
+            };
+
+            // Use the output profile path as the "target" for checkpoint
+            if let Ok(profile) = manager.get_profile(output_name) {
+                if let Ok(op) = history_manager.record_operation(op_type, &profile.path) {
+                    println!(
+                        "{} Recorded: {}",
+                        "[HISTORY]".dimmed(),
+                        op.id.as_str().dimmed()
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
