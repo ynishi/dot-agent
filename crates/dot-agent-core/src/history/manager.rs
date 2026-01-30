@@ -12,7 +12,8 @@ use crate::error::Result;
 
 /// Main API for history management
 pub struct HistoryManager {
-    /// Base directory for history storage
+    /// Base directory for history storage (reserved for future features)
+    #[allow(dead_code)]
     base_dir: PathBuf,
     /// Graph manager
     graph_manager: GraphManager,
@@ -26,6 +27,8 @@ pub struct HistoryManager {
 #[derive(Debug, Clone, Default)]
 struct FileHashCache {
     hashes: HashMap<String, String>,
+    /// When the cache was captured (reserved for cache invalidation)
+    #[allow(dead_code)]
     captured_at: Option<DateTime<Utc>>,
 }
 
@@ -228,7 +231,7 @@ impl HistoryManager {
     /// Initialize cache for a target directory
     pub fn init_cache(&mut self, target_dir: &Path) -> Result<()> {
         let mut hashes = HashMap::new();
-        self.walk_and_hash(target_dir, target_dir, &mut hashes)?;
+        Self::walk_and_hash(target_dir, target_dir, &mut hashes)?;
 
         self.cached_hashes.insert(
             target_dir.to_path_buf(),
@@ -242,7 +245,6 @@ impl HistoryManager {
     }
 
     fn walk_and_hash(
-        &self,
         root: &Path,
         current: &Path,
         hashes: &mut HashMap<String, String>,
@@ -261,7 +263,7 @@ impl HistoryManager {
             }
 
             if path.is_dir() {
-                self.walk_and_hash(root, &path, hashes)?;
+                Self::walk_and_hash(root, &path, hashes)?;
             } else if path.is_file() {
                 let relative = path
                     .strip_prefix(root)

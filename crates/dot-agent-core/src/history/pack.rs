@@ -166,7 +166,7 @@ impl PackWriter {
                     // Load delta files
                     let delta_dir = checkpoint_dir.join("delta");
                     if delta_dir.exists() {
-                        self.collect_files(&delta_dir, &delta_dir, &mut packed.files)?;
+                        Self::collect_files(&delta_dir, &delta_dir, &mut packed.files)?;
                     }
 
                     pack.checkpoints.push(packed);
@@ -179,7 +179,6 @@ impl PackWriter {
 
     /// Collect files recursively
     fn collect_files(
-        &self,
         root: &Path,
         current: &Path,
         files: &mut HashMap<String, Vec<u8>>,
@@ -193,7 +192,7 @@ impl PackWriter {
             let path = entry.path();
 
             if path.is_dir() {
-                self.collect_files(root, &path, files)?;
+                Self::collect_files(root, &path, files)?;
             } else if path.is_file() {
                 let relative = path
                     .strip_prefix(root)
@@ -393,7 +392,7 @@ impl PackReader {
                 .checkpoints
                 .iter()
                 .filter(|c| c.meta.is_full)
-                .last()
+                .next_back()
                 .map(|c| c.id.clone()),
         };
 

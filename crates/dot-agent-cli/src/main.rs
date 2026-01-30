@@ -3580,7 +3580,7 @@ fn handle_fusion(
                 .iter()
                 .filter_map(|s| {
                     let parts: Vec<&str> = s.splitn(2, ':').collect();
-                    if parts.len() >= 1 {
+                    if !parts.is_empty() {
                         Some(FusionInput {
                             profile: parts[0].to_string(),
                             category: parts.get(1).map(|s| s.to_string()),

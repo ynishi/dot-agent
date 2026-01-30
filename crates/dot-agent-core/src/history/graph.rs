@@ -227,7 +227,8 @@ impl GraphManager {
             .collect()
     }
 
-    /// Find the common ancestor of two operations
+    /// Find the common ancestor of two operations (reserved for merge/rebase features)
+    #[allow(dead_code)]
     pub fn common_ancestor(&self, id1: &str, id2: &str) -> Option<&Operation> {
         let ancestry1: std::collections::HashSet<_> = self
             .graph
@@ -236,13 +237,10 @@ impl GraphManager {
             .map(|op| op.id.as_str())
             .collect();
 
-        for op in self.graph.get_ancestry(id2) {
-            if ancestry1.contains(op.id.as_str()) {
-                return Some(op);
-            }
-        }
-
-        None
+        self.graph
+            .get_ancestry(id2)
+            .into_iter()
+            .find(|op| ancestry1.contains(op.id.as_str()))
     }
 }
 
