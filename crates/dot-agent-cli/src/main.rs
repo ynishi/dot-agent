@@ -4025,5 +4025,149 @@ fn handle_history(action: HistoryAction, base_dir: &Path) -> Result<()> {
 
             Ok(())
         }
+
+        HistoryAction::Pack { output } => {
+            use dot_agent_core::PackWriter;
+
+            println!(
+                "{}",
+                "⚠️  EXPERIMENTAL: Pack format may change without notice.".yellow()
+            );
+            println!();
+
+            let history_dir = base_dir.join("history");
+            if !history_dir.exists() {
+                println!("No history found.");
+                return Ok(());
+            }
+
+            println!("Packing history from: {}", history_dir.display());
+            println!("Output: {}", output.display());
+            println!();
+
+            let writer = PackWriter::new(&history_dir);
+            let stats = writer.write_to_file(&output)?;
+
+            println!("{} Pack created successfully!", "[OK]".green().bold());
+            println!();
+            println!("Statistics:");
+            println!("  Operations:   {}", stats.operations);
+            println!("  Checkpoints:  {}", stats.checkpoints);
+            println!("  Files:        {}", stats.files);
+            println!("  Size:         {} bytes", stats.size_bytes);
+
+            Ok(())
+        }
+
+        HistoryAction::Unpack { file, merge, force } => {
+            use dot_agent_core::PackReader;
+
+            println!(
+                "{}",
+                "⚠️  EXPERIMENTAL: Pack format may change without notice.".yellow()
+            );
+            println!();
+
+            if !file.exists() {
+                return Err(DotAgentError::NotFound(file.display().to_string()));
+            }
+
+            let reader = PackReader::open(&file)?;
+            let stats = reader.stats();
+
+            println!("Pack file: {}", file.display());
+            println!();
+            println!("Contents:");
+            println!("  Operations:   {}", stats.operations);
+            println!("  Checkpoints:  {}", stats.checkpoints);
+            println!("  Files:        {}", stats.files);
+            println!();
+
+            let history_dir = base_dir.join("history");
+            let exists = history_dir.exists();
+
+            if exists && !merge {
+                println!(
+                    "{} Existing history will be {}!",
+                    "WARNING:".yellow().bold(),
+                    "overwritten".red().bold()
+                );
+            }
+
+            if !force {
+                print!("Continue? [y/N] ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            if merge && exists {
+                println!("Merging into existing history...");
+                let merge_stats = reader.merge_into(&history_dir)?;
+
+                println!();
+                println!("{} Merge complete!", "[OK]".green().bold());
+                println!("  Operations added:   {}", merge_stats.operations_added);
+                println!("  Operations skipped: {}", merge_stats.operations_skipped);
+                println!("  Checkpoints added:  {}", merge_stats.checkpoints_added);
+                println!("  Checkpoints skipped:{}", merge_stats.checkpoints_skipped);
+            } else {
+                println!("Unpacking to: {}", history_dir.display());
+                reader.unpack_to(&history_dir)?;
+
+                println!();
+                println!("{} Unpack complete!", "[OK]".green().bold());
+            }
+
+            Ok(())
+        }
+
+        HistoryAction::PackInfo { file } => {
+            use dot_agent_core::PackReader;
+
+            if !file.exists() {
+                return Err(DotAgentError::NotFound(file.display().to_string()));
+            }
+
+            let reader = PackReader::open(&file)?;
+            let pack = reader.info();
+            let stats = reader.stats();
+
+            println!("{}", "Pack Information".bold());
+            println!("{}", "═".repeat(50));
+            println!();
+            println!("File:     {}", file.display());
+            println!("Version:  {} {}", pack.version, "(EXPERIMENTAL)".yellow());
+            println!();
+            println!("{}", "Statistics".bold());
+            println!("  Operations:   {}", stats.operations);
+            println!("  Checkpoints:  {}", stats.checkpoints);
+            println!("  Files:        {}", stats.files);
+            println!("  Total size:   {} bytes", stats.size_bytes);
+            println!();
+
+            // Show recent operations
+            if !pack.graph.operations.is_empty() {
+                println!("{}", "Recent Operations (up to 5)".bold());
+                let mut ops: Vec<_> = pack.graph.operations.values().collect();
+                ops.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+                for op in ops.iter().take(5) {
+                    println!(
+                        "  {} {}",
+                        op.timestamp.format("%Y-%m-%d %H:%M").to_string().dimmed(),
+                        op.summary()
+                    );
+                }
+            }
+
+            Ok(())
+        }
     }
 }

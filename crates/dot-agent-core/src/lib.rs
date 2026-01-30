@@ -44,6 +44,7 @@ pub use category::{
 // History system
 pub use history::{
     ChangeDetectionResult, Checkpoint, CheckpointManager, Delta, DeltaEntry, DeltaType,
-    FusionInput, HistoryEntry, HistoryManager, InstallOperationOptions, Operation, OperationGraph,
-    OperationId, OperationType, RollbackResult, SourceInfo,
+    FusionInput, HistoryEntry, HistoryManager, InstallOperationOptions, MergeStats, Operation,
+    OperationGraph, OperationId, OperationType, Pack, PackReader, PackStats, PackWriter,
+    RollbackResult, SourceInfo, PACK_EXTENSION,
 };

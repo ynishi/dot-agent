@@ -1046,4 +1046,31 @@ pub enum HistoryAction {
         #[arg(short, long)]
         compact: bool,
     },
+
+    /// [EXPERIMENTAL] Export history to a portable pack file
+    Pack {
+        /// Output file path (default: history.dotpack)
+        #[arg(short, long, default_value = "history.dotpack")]
+        output: PathBuf,
+    },
+
+    /// [EXPERIMENTAL] Import history from a pack file
+    Unpack {
+        /// Pack file to import
+        file: PathBuf,
+
+        /// Merge with existing history instead of replacing
+        #[arg(short, long)]
+        merge: bool,
+
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// [EXPERIMENTAL] Show information about a pack file
+    PackInfo {
+        /// Pack file to inspect
+        file: PathBuf,
+    },
 }
