@@ -1315,10 +1315,10 @@ fn handle_install(
         }
         InstallTarget::Single(platform) => {
             // Single platform
-            if global || target.is_none() {
+            if global {
                 vec![(Some(*platform), platform.base_dir())]
             } else {
-                // --path was specified, use it with platform filter
+                // Use --path or current directory
                 let target_dir = installer.resolve_target(target, global)?;
                 vec![(Some(*platform), target_dir)]
             }
