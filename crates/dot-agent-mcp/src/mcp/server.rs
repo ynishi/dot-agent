@@ -14,7 +14,10 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use dot_agent_core::{FileStatus, IgnoreConfig, InstallOptions, Installer, ProfileManager};
+use dot_agent_core::{
+    FileStatus, IgnoreConfig, InstallOptions, Installer, ProfileManager, SnapshotManager,
+    SnapshotTrigger,
+};
 
 // =============================================================================
 // Public entry point
@@ -85,6 +88,29 @@ impl DotAgentMcp {
         Installer::new(self.base_dir.clone())
     }
 
+    fn snapshot_manager(&self) -> SnapshotManager {
+        SnapshotManager::new(self.base_dir.clone())
+    }
+
+    /// Save a snapshot before a destructive operation. Returns warning text on failure.
+    fn save_pre_snapshot(
+        &self,
+        target: &std::path::Path,
+        trigger: SnapshotTrigger,
+        profiles: &[String],
+    ) -> Option<String> {
+        match self
+            .snapshot_manager()
+            .save_target(target, trigger, None, profiles)
+        {
+            Ok(snap) => Some(format!(
+                "Snapshot '{}' saved ({} files)",
+                snap.id, snap.file_count
+            )),
+            Err(e) => Some(format!("[WARNING] Failed to save snapshot: {e}")),
+        }
+    }
+
     fn resolve_target(&self, path: Option<String>, global: bool) -> Result<PathBuf, McpError> {
         let installer = self.installer();
         let target_path = path.map(PathBuf::from);
@@ -130,6 +156,8 @@ impl ServerHandler for DotAgentMcp {
                  - `diff`: Show differences between profile and installed files\n\
                  - `sync_back`: Write modified installed files back to the source profile\n\
                  - `status`: Show detailed installation status\n\
+                 - `snapshot_list`: List all snapshots for a target\n\
+                 - `snapshot_restore`: Restore a snapshot (saves pre-restore snapshot first)\n\
                  \n\
                  Use `--global` or `global: true` to target ~/.claude directly.\n\
                  Use `--path` or `path: \"...\"` to target a specific directory."
@@ -246,6 +274,26 @@ struct SyncBackParams {
     dry_run: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SnapshotListParams {
+    /// Target directory path (default: current dir)
+    path: Option<String>,
+    /// Use ~/.claude directly
+    #[serde(default)]
+    global: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SnapshotRestoreParams {
+    /// Snapshot ID to restore (e.g. "20260406_123456")
+    id: String,
+    /// Target directory path (default: current dir)
+    path: Option<String>,
+    /// Use ~/.claude directly
+    #[serde(default)]
+    global: bool,
+}
+
 // =============================================================================
 // Tool implementations
 // =============================================================================
@@ -343,6 +391,18 @@ impl DotAgentMcp {
         let target_dir = self.resolve_target(params.path, params.global)?;
         let ignore_config = IgnoreConfig::with_defaults();
 
+        // Pre-install snapshot
+        let mut lines = Vec::new();
+        if target_dir.exists() {
+            if let Some(msg) = self.save_pre_snapshot(
+                &target_dir,
+                SnapshotTrigger::PreInstall,
+                std::slice::from_ref(&params.profile),
+            ) {
+                lines.push(msg);
+            }
+        }
+
         let opts = InstallOptions::new()
             .force(params.force)
             .ignore_config(ignore_config);
@@ -351,14 +411,12 @@ impl DotAgentMcp {
             .install(&profile, &target_dir, &opts)
             .map_err(Self::to_mcp_error)?;
 
-        let mut lines = vec![
-            format!(
-                "Installed profile '{}' to {}",
-                params.profile,
-                target_dir.display()
-            ),
-            format!("  Installed: {}", result.installed),
-        ];
+        lines.push(format!(
+            "Installed profile '{}' to {}",
+            params.profile,
+            target_dir.display()
+        ));
+        lines.push(format!("  Installed: {}", result.installed));
         if result.merged > 0 {
             lines.push(format!("  Merged: {}", result.merged));
         }
@@ -390,6 +448,16 @@ impl DotAgentMcp {
         let target_dir = self.resolve_target(params.path, params.global)?;
         let ignore_config = IgnoreConfig::with_defaults();
 
+        // Pre-uninstall snapshot
+        let mut lines = Vec::new();
+        if let Some(msg) = self.save_pre_snapshot(
+            &target_dir,
+            SnapshotTrigger::PreUninstall,
+            std::slice::from_ref(&params.profile),
+        ) {
+            lines.push(msg);
+        }
+
         let opts = InstallOptions::new()
             .force(params.force)
             .ignore_config(ignore_config);
@@ -398,14 +466,12 @@ impl DotAgentMcp {
             .remove(&profile, &target_dir, &opts)
             .map_err(Self::to_mcp_error)?;
 
-        let mut lines = vec![
-            format!(
-                "Removed profile '{}' from {}",
-                params.profile,
-                target_dir.display()
-            ),
-            format!("  Removed: {}", removed),
-        ];
+        lines.push(format!(
+            "Removed profile '{}' from {}",
+            params.profile,
+            target_dir.display()
+        ));
+        lines.push(format!("  Removed: {}", removed));
         if kept > 0 {
             lines.push(format!("  Kept: {}", kept));
         }
@@ -445,6 +511,13 @@ impl DotAgentMcp {
             .unwrap_or_default();
 
         let mut output = Vec::new();
+
+        // Pre-switch snapshot
+        if let Some(msg) =
+            self.save_pre_snapshot(&target_dir, SnapshotTrigger::PreUpdate, &current_profiles)
+        {
+            output.push(msg);
+        }
 
         // Remove current profiles (fail-fast: any error aborts the switch)
         let remove_opts = InstallOptions::new()
@@ -683,5 +756,86 @@ impl DotAgentMcp {
         ));
 
         ok_text(lines.join("\n"))
+    }
+
+    #[tool(
+        name = "snapshot_list",
+        description = "List all snapshots for a target directory",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn tool_snapshot_list(
+        &self,
+        Parameters(params): Parameters<SnapshotListParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let target_dir = self.resolve_target(params.path, params.global)?;
+        let snap_mgr = self.snapshot_manager();
+
+        let snapshots = snap_mgr
+            .list_target(&target_dir)
+            .map_err(Self::to_mcp_error)?;
+
+        if snapshots.is_empty() {
+            return ok_text(format!("No snapshots for {}", target_dir.display()));
+        }
+
+        let mut lines = vec![format!(
+            "Snapshots for {} ({}):",
+            target_dir.display(),
+            snapshots.len()
+        )];
+        for snap in &snapshots {
+            let msg = snap
+                .message
+                .as_deref()
+                .map(|m| format!(" — {m}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {} [{}] {} files, trigger: {}{}",
+                snap.id,
+                snap.display_time(),
+                snap.file_count,
+                snap.trigger,
+                msg,
+            ));
+        }
+        ok_text(lines.join("\n"))
+    }
+
+    #[tool(
+        name = "snapshot_restore",
+        description = "Restore a snapshot to a target directory. Saves a pre-restore snapshot first.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn tool_snapshot_restore(
+        &self,
+        Parameters(params): Parameters<SnapshotRestoreParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let target_dir = self.resolve_target(params.path, params.global)?;
+        let snap_mgr = self.snapshot_manager();
+
+        // Save a pre-restore snapshot for safety
+        let mut output = Vec::new();
+        if let Some(msg) = self.save_pre_snapshot(&target_dir, SnapshotTrigger::PreUpdate, &[]) {
+            output.push(msg);
+        }
+
+        let (removed, restored) = snap_mgr
+            .restore_target(&target_dir, &params.id)
+            .map_err(Self::to_mcp_error)?;
+
+        output.push(format!(
+            "Restored snapshot '{}': removed {} files, restored {} files",
+            params.id, removed, restored
+        ));
+
+        ok_text(output.join("\n"))
     }
 }
