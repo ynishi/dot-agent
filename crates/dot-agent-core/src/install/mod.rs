@@ -784,3 +784,167 @@ fn prefix_path(relative_path: &Path, profile_name: &str) -> PathBuf {
     // No transformation needed
     relative_path.to_path_buf()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profile::Profile;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// A mock ConflictResolver that always returns a fixed Resolution.
+    struct MockResolver {
+        resolution: Resolution,
+    }
+
+    impl ConflictResolver for MockResolver {
+        fn resolve(&self, _: &Path, _: &[u8], _: &[u8]) -> Result<Resolution> {
+            Ok(self.resolution)
+        }
+    }
+
+    /// Build a minimal Profile pointing at `profile_dir` with `name`.
+    fn make_profile(name: &str, profile_dir: &Path) -> Profile {
+        Profile::new(name.to_string(), profile_dir.to_path_buf())
+    }
+
+    /// Write `content` to `dir/filename`, creating parent dirs as needed.
+    fn write_file(dir: &Path, filename: &str, content: &[u8]) {
+        let path = dir.join(filename);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    /// Create an Installer whose base_dir is `base`.
+    fn make_installer(base: &Path) -> Installer {
+        Installer::new(base.to_path_buf())
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: ConflictResolver::KeepLocal — existing file must be unchanged
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_install_with_conflict_resolver_keep_local() {
+        let base = TempDir::new().unwrap();
+        let profile_dir = base.path().join("profile");
+        let target_dir = base.path().join("target");
+
+        // Profile has "rules/test-rule.md" with profile content
+        write_file(&profile_dir, "rules/test-rule.md", b"profile content");
+
+        // Target already has the file with different (local) content
+        fs::create_dir_all(&target_dir).unwrap();
+        write_file(&target_dir, "rules/test-rule.md", b"local content");
+
+        let installer = make_installer(base.path());
+        let profile = make_profile("test", &profile_dir);
+        let resolver = MockResolver {
+            resolution: Resolution::KeepLocal,
+        };
+        let opts = InstallOptions::new()
+            .no_prefix(true)
+            .conflict_resolver(&resolver);
+
+        let result = installer.install(&profile, &target_dir, &opts).unwrap();
+
+        // File was kept (skipped), not overwritten
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.installed, 0);
+        let content = fs::read(target_dir.join("rules/test-rule.md")).unwrap();
+        assert_eq!(content, b"local content");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: ConflictResolver::OverwriteWithProfile — file must be replaced
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_install_with_conflict_resolver_overwrite() {
+        let base = TempDir::new().unwrap();
+        let profile_dir = base.path().join("profile");
+        let target_dir = base.path().join("target");
+
+        write_file(&profile_dir, "rules/test-rule.md", b"profile content");
+
+        fs::create_dir_all(&target_dir).unwrap();
+        write_file(&target_dir, "rules/test-rule.md", b"local content");
+
+        let installer = make_installer(base.path());
+        let profile = make_profile("test", &profile_dir);
+        let resolver = MockResolver {
+            resolution: Resolution::OverwriteWithProfile,
+        };
+        let opts = InstallOptions::new()
+            .no_prefix(true)
+            .conflict_resolver(&resolver);
+
+        let result = installer.install(&profile, &target_dir, &opts).unwrap();
+
+        // File was overwritten with profile content
+        assert_eq!(result.installed, 1);
+        assert_eq!(result.skipped, 0);
+        let content = fs::read(target_dir.join("rules/test-rule.md")).unwrap();
+        assert_eq!(content, b"profile content");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: ConflictResolver::Abort — operation must return DotAgentError::Aborted
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_install_with_conflict_resolver_abort() {
+        let base = TempDir::new().unwrap();
+        let profile_dir = base.path().join("profile");
+        let target_dir = base.path().join("target");
+
+        write_file(&profile_dir, "rules/test-rule.md", b"profile content");
+
+        fs::create_dir_all(&target_dir).unwrap();
+        write_file(&target_dir, "rules/test-rule.md", b"local content");
+
+        let installer = make_installer(base.path());
+        let profile = make_profile("test", &profile_dir);
+        let resolver = MockResolver {
+            resolution: Resolution::Abort,
+        };
+        let opts = InstallOptions::new()
+            .no_prefix(true)
+            .conflict_resolver(&resolver);
+
+        let err = installer.install(&profile, &target_dir, &opts).unwrap_err();
+
+        assert!(
+            matches!(err, DotAgentError::Aborted),
+            "expected DotAgentError::Aborted, got: {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: No resolver — conflict is reported and file is skipped (existing behaviour)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_install_without_resolver_preserves_existing_behavior() {
+        let base = TempDir::new().unwrap();
+        let profile_dir = base.path().join("profile");
+        let target_dir = base.path().join("target");
+
+        write_file(&profile_dir, "rules/test-rule.md", b"profile content");
+
+        fs::create_dir_all(&target_dir).unwrap();
+        write_file(&target_dir, "rules/test-rule.md", b"local content");
+
+        let installer = make_installer(base.path());
+        let profile = make_profile("test", &profile_dir);
+        // No conflict_resolver set
+        let opts = InstallOptions::new().no_prefix(true);
+
+        let result = installer.install(&profile, &target_dir, &opts).unwrap();
+
+        // Existing behaviour: conflicting file is counted as conflict and skipped
+        assert_eq!(result.conflicts, 1);
+        assert_eq!(result.installed, 0);
+        // Local file must remain unchanged
+        let content = fs::read(target_dir.join("rules/test-rule.md")).unwrap();
+        assert_eq!(content, b"local content");
+    }
+}
