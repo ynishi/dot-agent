@@ -2,6 +2,7 @@
 members = [
     "crates/dot-agent-core",
     "crates/dot-agent-cli",
+    "crates/dot-agent-mcp",
 ]
 resolver = "2"
 
