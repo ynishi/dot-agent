@@ -443,6 +443,25 @@ pub enum Commands {
         include_uncategorized: bool,
     },
 
+    /// Sync modified installed files back to the source profile
+    #[command(name = "sync-back")]
+    SyncBack {
+        /// Profile name to sync back to
+        profile: String,
+
+        /// Base directory (installs to <path>/.claude, default: current dir)
+        #[arg(long)]
+        path: Option<PathBuf>,
+
+        /// Sync from ~/.claude directly (ignores --path)
+        #[arg(short, long)]
+        global: bool,
+
+        /// Dry run (show what would be synced)
+        #[arg(short, long)]
+        dry_run: bool,
+    },
+
     /// Manage operation history and rollback
     History {
         #[command(subcommand)]

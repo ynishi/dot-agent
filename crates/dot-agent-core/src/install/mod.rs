@@ -87,6 +87,13 @@ pub struct InstallResult {
 }
 
 #[derive(Debug, Default)]
+pub struct SyncBackResult {
+    pub synced: usize,
+    pub unchanged: usize,
+    pub files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Default)]
 pub struct DiffResult {
     pub unchanged: usize,
     pub modified: usize,
@@ -707,6 +714,56 @@ impl Installer {
 
         Ok((updated, new, skipped, unchanged))
     }
+
+    /// Sync modified installed files back to the profile directory.
+    ///
+    /// Detects files that were modified locally (compared to the profile),
+    /// and copies them back into the profile, removing the profile-name prefix.
+    pub fn sync_back(
+        &self,
+        profile: &Profile,
+        target: &Path,
+        ignore_config: &IgnoreConfig,
+        dry_run: bool,
+        on_file: FileCallback<'_>,
+    ) -> Result<SyncBackResult> {
+        let mut result = SyncBackResult::default();
+        let profile_files = profile.list_files_with_config(ignore_config)?;
+
+        for original_path in &profile_files {
+            let prefixed_path = prefix_path(original_path, &profile.name);
+            let src_profile = profile.path.join(original_path);
+            let dst_installed = target.join(&prefixed_path);
+
+            if !dst_installed.exists() {
+                continue;
+            }
+
+            let profile_hash = compute_file_hash(&src_profile)?;
+            let installed_hash = compute_file_hash(&dst_installed)?;
+
+            if profile_hash == installed_hash {
+                result.unchanged += 1;
+                continue;
+            }
+
+            // File was modified locally — copy back to profile
+            if !dry_run {
+                if let Some(parent) = src_profile.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&dst_installed, &src_profile)?;
+            }
+
+            if let Some(f) = on_file {
+                f("SYNC", &original_path.to_string_lossy());
+            }
+            result.synced += 1;
+            result.files.push(original_path.clone());
+        }
+
+        Ok(result)
+    }
 }
 
 fn remove_empty_dirs(dir: &Path, root: &Path) -> std::io::Result<()> {
@@ -946,5 +1003,81 @@ mod tests {
         // Local file must remain unchanged
         let content = fs::read(target_dir.join("rules/test-rule.md")).unwrap();
         assert_eq!(content, b"local content");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: sync_back
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_sync_back_modified_files() {
+        let base = TempDir::new().unwrap();
+        let profile_dir = base.path().join("profile");
+        let target_dir = base.path().join("target");
+
+        write_file(&profile_dir, "rules/my-rule.md", b"original");
+
+        let installer = make_installer(base.path());
+        let profile = make_profile("prof", &profile_dir);
+        let opts = InstallOptions::new();
+        installer.install(&profile, &target_dir, &opts).unwrap();
+
+        // User edits the installed (prefixed) file
+        write_file(&target_dir, "rules/prof-my-rule.md", b"user edited");
+
+        let ignore_config = IgnoreConfig::with_defaults();
+        let result = installer
+            .sync_back(&profile, &target_dir, &ignore_config, false, None)
+            .unwrap();
+
+        assert_eq!(result.synced, 1);
+        let content = fs::read(profile_dir.join("rules/my-rule.md")).unwrap();
+        assert_eq!(content, b"user edited");
+    }
+
+    #[test]
+    fn test_sync_back_unchanged_files() {
+        let base = TempDir::new().unwrap();
+        let profile_dir = base.path().join("profile");
+        let target_dir = base.path().join("target");
+
+        write_file(&profile_dir, "rules/my-rule.md", b"same content");
+
+        let installer = make_installer(base.path());
+        let profile = make_profile("prof", &profile_dir);
+        let opts = InstallOptions::new();
+        installer.install(&profile, &target_dir, &opts).unwrap();
+
+        let ignore_config = IgnoreConfig::with_defaults();
+        let result = installer
+            .sync_back(&profile, &target_dir, &ignore_config, false, None)
+            .unwrap();
+
+        assert_eq!(result.synced, 0);
+    }
+
+    #[test]
+    fn test_sync_back_dry_run() {
+        let base = TempDir::new().unwrap();
+        let profile_dir = base.path().join("profile");
+        let target_dir = base.path().join("target");
+
+        write_file(&profile_dir, "rules/my-rule.md", b"original");
+
+        let installer = make_installer(base.path());
+        let profile = make_profile("prof", &profile_dir);
+        let opts = InstallOptions::new();
+        installer.install(&profile, &target_dir, &opts).unwrap();
+
+        write_file(&target_dir, "rules/prof-my-rule.md", b"user edited");
+
+        let ignore_config = IgnoreConfig::with_defaults();
+        let result = installer
+            .sync_back(&profile, &target_dir, &ignore_config, true, None)
+            .unwrap();
+
+        assert_eq!(result.synced, 1);
+        // Profile file should remain original (dry run)
+        let content = fs::read(profile_dir.join("rules/my-rule.md")).unwrap();
+        assert_eq!(content, b"original");
     }
 }

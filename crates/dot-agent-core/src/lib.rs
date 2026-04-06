@@ -20,7 +20,7 @@ pub use install::{
     is_mergeable_json, merge_json, merge_json_file, unmerge_json, unmerge_json_file,
     ConflictResolver, DiffResult, FileInfo, FileStatus, InstallOptions, InstallResult, Installer,
     MergeRecord, MergeResult, Metadata, ProfileSnapshotManager, Resolution, Snapshot, SnapshotDiff,
-    SnapshotManager, SnapshotTrigger, UnmergeResult,
+    SnapshotManager, SnapshotTrigger, SyncBackResult, UnmergeResult,
 };
 pub use llm::{check_claude_cli, execute_claude, require_claude_cli, LlmConfig};
 pub use platform::{InstallTarget, Platform};

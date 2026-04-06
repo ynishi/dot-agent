@@ -326,6 +326,12 @@ fn main() -> ExitCode {
                 target,
             )
         }
+        Some(Commands::SyncBack {
+            profile,
+            path,
+            global,
+            dry_run,
+        }) => handle_sync_back(&base_dir, &profile, path.as_deref(), global, dry_run),
         Some(Commands::History { action }) => handle_history(action, &base_dir),
         None => {
             Cli::command().print_help().ok();
@@ -3089,6 +3095,89 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
                 println!("  {}", id.dimmed());
             }
         }
+    }
+
+    Ok(())
+}
+
+fn handle_sync_back(
+    base_dir: &Path,
+    profile_name: &str,
+    target: Option<&Path>,
+    global: bool,
+    dry_run: bool,
+) -> Result<()> {
+    use dot_agent_core::ProfileSnapshotManager;
+
+    let profile_manager = ProfileManager::new(base_dir.to_path_buf());
+    let installer = Installer::new(base_dir.to_path_buf());
+    let ignore_config = IgnoreConfig::with_defaults();
+
+    let profile = profile_manager.get_profile(profile_name)?;
+    let target_dir = installer.resolve_target(target, global)?;
+
+    if !target_dir.exists() {
+        return Err(DotAgentError::TargetNotFound { path: target_dir });
+    }
+
+    // Create profile snapshot before writing back
+    if !dry_run {
+        let snapshot_manager = ProfileSnapshotManager::new(base_dir.to_path_buf());
+        match snapshot_manager.save_profile(profile_name, &profile.path, Some("pre-sync-back")) {
+            Ok(snapshot) => {
+                println!(
+                    "Profile snapshot saved: {} ({} files)",
+                    snapshot.id.cyan(),
+                    snapshot.file_count
+                );
+            }
+            Err(e) => {
+                println!("{} saving profile snapshot: {}", "Warning:".yellow(), e);
+            }
+        }
+    }
+
+    println!();
+    if dry_run {
+        println!(
+            "Sync back (dry run): {} -> profile {}",
+            target_dir.display(),
+            profile_name.cyan()
+        );
+    } else {
+        println!(
+            "Sync back: {} -> profile {}",
+            target_dir.display(),
+            profile_name.cyan()
+        );
+    }
+    println!();
+
+    let on_file = |status: &str, path: &str| {
+        let colored_status = match status {
+            "SYNC" => "SYNC".green().to_string(),
+            _ => status.to_string(),
+        };
+        println!("  {}  {}", colored_status, path);
+    };
+
+    let result = installer.sync_back(
+        &profile,
+        &target_dir,
+        &ignore_config,
+        dry_run,
+        Some(&on_file),
+    )?;
+
+    println!();
+    if dry_run {
+        println!("Would sync: {} files", result.synced);
+    } else {
+        println!("{}", "Sync complete!".green());
+        println!("  Synced:    {} files", result.synced);
+    }
+    if result.unchanged > 0 {
+        println!("  Unchanged: {} files", result.unchanged);
     }
 
     Ok(())
