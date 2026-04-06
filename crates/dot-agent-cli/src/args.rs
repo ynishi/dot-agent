@@ -478,9 +478,17 @@ pub enum Commands {
         #[arg(long)]
         no_snapshot: bool,
 
-        /// Force remove even with local modifications
+        /// Force overwrite all conflicts with profile version
         #[arg(short, long)]
         force: bool,
+
+        /// Keep local files on conflict (non-interactive)
+        #[arg(long, conflicts_with_all = ["force", "interactive"])]
+        keep_local: bool,
+
+        /// Prompt interactively on each conflict
+        #[arg(short, long, conflicts_with_all = ["force", "keep_local"])]
+        interactive: bool,
     },
 }
 

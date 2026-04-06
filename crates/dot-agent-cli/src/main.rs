@@ -42,6 +42,20 @@ impl ConflictResolver for ForceResolver {
     }
 }
 
+/// Resolver that always keeps the local version (used with --keep-local).
+struct KeepLocalResolver;
+
+impl ConflictResolver for KeepLocalResolver {
+    fn resolve(
+        &self,
+        _relative_path: &Path,
+        _local_content: &[u8],
+        _profile_content: &[u8],
+    ) -> dot_agent_core::Result<Resolution> {
+        Ok(Resolution::KeepLocal)
+    }
+}
+
 /// Interactive resolver that prompts the user for each conflicting file.
 struct InteractiveResolver;
 
@@ -296,6 +310,8 @@ fn main() -> ExitCode {
             all,
             no_snapshot,
             force,
+            keep_local,
+            interactive,
         }) => {
             let target = resolve_install_target(codex, claude, all, path.as_deref());
             handle_switch(
@@ -305,6 +321,8 @@ fn main() -> ExitCode {
                 global,
                 no_snapshot,
                 force,
+                keep_local,
+                interactive,
                 target,
             )
         }
@@ -3076,6 +3094,7 @@ fn handle_snapshot(action: SnapshotAction, base_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_switch(
     base_dir: &Path,
     profile_name: &str,
@@ -3083,6 +3102,8 @@ fn handle_switch(
     global: bool,
     no_snapshot: bool,
     force: bool,
+    keep_local: bool,
+    interactive: bool,
     _install_target: InstallTarget, // TODO: Implement multi-platform support
 ) -> Result<()> {
     use dot_agent_core::{SnapshotManager, SnapshotTrigger};
@@ -3217,12 +3238,21 @@ fn handle_switch(
             .ignore_config(ignore_config.clone())
             .conflict_resolver(&resolver);
         installer.install(&new_profile, &target_dir, &install_opts)?
-    } else {
-        let resolver = InteractiveResolver;
+    } else if keep_local {
+        let resolver = KeepLocalResolver;
         let install_opts = InstallOptions::new()
-            .force(force)
             .ignore_config(ignore_config.clone())
             .conflict_resolver(&resolver);
+        installer.install(&new_profile, &target_dir, &install_opts)?
+    } else if interactive {
+        let resolver = InteractiveResolver;
+        let install_opts = InstallOptions::new()
+            .ignore_config(ignore_config.clone())
+            .conflict_resolver(&resolver);
+        installer.install(&new_profile, &target_dir, &install_opts)?
+    } else {
+        // No resolver: conflicts cause immediate error
+        let install_opts = InstallOptions::new().ignore_config(ignore_config.clone());
         installer.install(&new_profile, &target_dir, &install_opts)?
     };
 
@@ -3234,6 +3264,9 @@ fn handle_switch(
     }
     if result.conflicts > 0 {
         println!("  Conflicts: {} files", result.conflicts);
+        return Err(DotAgentError::Conflict {
+            path: target_dir.clone(),
+        });
     }
 
     Ok(())
