@@ -125,6 +125,9 @@ pub enum DotAgentError {
 
     #[error("Checkpoint not found: {id}")]
     CheckpointNotFound { id: String },
+
+    #[error("Operation aborted by user")]
+    Aborted,
 }
 
 pub type Result<T> = std::result::Result<T, DotAgentError>;
@@ -162,6 +165,7 @@ impl DotAgentError {
             Self::NotFound(_) => 29,
             Self::OperationNotFound { .. } => 30,
             Self::CheckpointNotFound { .. } => 31,
+            Self::Aborted => 32,
             _ => 1,
         }
     }
