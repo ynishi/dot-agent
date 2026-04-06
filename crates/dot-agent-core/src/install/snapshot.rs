@@ -33,13 +33,7 @@ const EXCLUDED_DIRS: &[&str] = &[
 ];
 
 /// Files to exclude from target snapshots
-const EXCLUDED_FILES: &[&str] = &[
-    ".DS_Store",
-    "history.jsonl",
-    "__store.db",
-    "config.json",
-    ".dot-agent-meta.toml",
-];
+const EXCLUDED_FILES: &[&str] = &[".DS_Store", "history.jsonl", "__store.db", "config.json"];
 
 /// Trigger that caused the snapshot to be created
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,7 +173,8 @@ fn should_exclude_target(path: &Path, base: &Path) -> bool {
         if EXCLUDED_FILES.iter().any(|&f| name_str == f) {
             return true;
         }
-        if name_str.starts_with(".dot-agent") {
+        // Exclude .dot-agent-history but include .dot-agent-meta.toml
+        if name_str == ".dot-agent-history" {
             return true;
         }
     }
