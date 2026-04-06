@@ -1,3 +1,6 @@
 /target
 
 .claude
+
+workspace
+.mcp.json
