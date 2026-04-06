@@ -5,3 +5,4 @@
 workspace
 .mcp.json
 .ryo
+.worktrees
