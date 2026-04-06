@@ -28,6 +28,31 @@ const CLAUDE_DIR: &str = ".claude";
 /// Callback type for file operation progress reporting
 pub type FileCallback<'a> = Option<&'a dyn Fn(&str, &str)>;
 
+/// Resolution for a file conflict during install/switch
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// Keep the local version, skip profile file
+    KeepLocal,
+    /// Overwrite with profile version
+    OverwriteWithProfile,
+    /// Abort the entire operation
+    Abort,
+}
+
+/// Strategy for resolving file conflicts during install/switch operations
+pub trait ConflictResolver {
+    /// Called when a local file differs from the profile version.
+    /// `relative_path`: path relative to target dir (e.g., "rules/my-rule.md")
+    /// `local_content`: current content on disk
+    /// `profile_content`: content from the profile being installed
+    fn resolve(
+        &self,
+        relative_path: &Path,
+        local_content: &[u8],
+        profile_content: &[u8],
+    ) -> crate::error::Result<Resolution>;
+}
+
 // Directories where files should be prefixed with profile name
 const PREFIXED_DIRS: &[&str] = &["agents", "commands", "rules"];
 // Directories where subdirectories should be prefixed (skills has SKILL.md inside)
@@ -87,6 +112,8 @@ pub struct InstallOptions<'a> {
     pub on_file: FileCallback<'a>,
     /// Target platform (for filtering unsupported files)
     pub platform: Option<Platform>,
+    /// Strategy for resolving file conflicts (None = skip with CONFLICT report)
+    pub conflict_resolver: Option<&'a dyn ConflictResolver>,
 }
 
 impl std::fmt::Debug for InstallOptions<'_> {
@@ -99,6 +126,7 @@ impl std::fmt::Debug for InstallOptions<'_> {
             .field("ignore_config", &self.ignore_config)
             .field("on_file", &self.on_file.is_some())
             .field("platform", &self.platform)
+            .field("conflict_resolver", &self.conflict_resolver.is_some())
             .finish()
     }
 }
@@ -151,6 +179,12 @@ impl<'a> InstallOptions<'a> {
     /// Set target platform for filtering
     pub fn platform(mut self, platform: Platform) -> Self {
         self.platform = Some(platform);
+        self
+    }
+
+    /// Set conflict resolver strategy
+    pub fn conflict_resolver(mut self, resolver: &'a dyn ConflictResolver) -> Self {
+        self.conflict_resolver = Some(resolver);
         self
     }
 
@@ -289,11 +323,30 @@ impl Installer {
 
                 // Different content - for JSON files with no_merge, this is a conflict
                 if !opts.force {
-                    if let Some(f) = opts.on_file {
-                        f("CONFLICT", &relative_str);
+                    if let Some(resolver) = opts.conflict_resolver {
+                        let local_content = fs::read(&dst)?;
+                        match resolver.resolve(&prefixed_path, &local_content, &src_content)? {
+                            Resolution::KeepLocal => {
+                                if let Some(f) = opts.on_file {
+                                    f("KEEP", &relative_str);
+                                }
+                                result.skipped += 1;
+                                continue;
+                            }
+                            Resolution::OverwriteWithProfile => {
+                                // Fall through to write logic below
+                            }
+                            Resolution::Abort => {
+                                return Err(DotAgentError::Aborted);
+                            }
+                        }
+                    } else {
+                        if let Some(f) = opts.on_file {
+                            f("CONFLICT", &relative_str);
+                        }
+                        result.conflicts += 1;
+                        continue;
                     }
-                    result.conflicts += 1;
-                    continue;
                 }
             }
 
