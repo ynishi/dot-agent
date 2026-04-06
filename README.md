@@ -66,14 +66,40 @@ dot-agent remove -p my-profile ~/my-project
 | `diff -p <profile> [target]` | Show differences |
 | `remove -p <profile> [target]` | Remove installed files |
 | `status [target]` | Show installation status |
-| `switch -p <profile> [target]` | Switch to a different profile |
+| `switch -p <profile> [target]` | Switch to a different profile (prompts on conflict) |
 | `snapshot <action>` | Manage target snapshots |
 | `completions <shell>` | Generate shell completions |
+
+## Switching Profiles
+
+`switch` replaces one installed profile with another while preserving your local modifications.
+
+```bash
+# Switch to a different profile (interactive conflict resolution)
+dot-agent switch -p new-profile ~/my-project
+
+# Switch and overwrite all conflicts without prompting
+dot-agent switch -p new-profile ~/my-project --force
+```
+
+When local files differ from the profile, `switch` displays each conflict and prompts:
+
+```
+CONFLICT: rules/my-profile-testing.md
+  [k] keep local   [o] overwrite with profile   [a] abort
+```
+
+- `k` — keep your local version (file is not overwritten)
+- `o` — overwrite with the incoming profile version
+- `a` — abort the entire switch operation
+
+With `--force`, all conflicts are automatically overwritten without prompting.
+A snapshot is saved automatically before the switch so you can restore if needed.
 
 ## Options
 
 - `--global` / `-g`: Use `~/.claude` as target
-- `--force` / `-f`: Overwrite conflicts
+- `--force` / `-f`: Overwrite conflicts without prompting (used with `install`, `upgrade`, `switch`)
 - `--dry-run` / `-d`: Preview without changes
 - `--no-prefix`: Don't add profile prefix to filenames
 - `--gui`: Launch GUI (requires `gui` feature)
