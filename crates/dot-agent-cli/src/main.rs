@@ -8,7 +8,9 @@ use colored::Colorize;
 
 use dot_agent_core::channel::ChannelManager;
 use dot_agent_core::config::Config;
-use dot_agent_core::install::{FileStatus, InstallOptions, Installer};
+use dot_agent_core::install::{
+    ConflictResolver, FileStatus, InstallOptions, Installer, Resolution,
+};
 use dot_agent_core::platform::InstallTarget;
 use dot_agent_core::profile::{IgnoreConfig, ProfileManager};
 use dot_agent_core::{DotAgentError, Metadata, Result};
@@ -21,6 +23,60 @@ use args::{
 
 #[cfg(feature = "gui")]
 mod gui;
+
+// ---------------------------------------------------------------------------
+// ConflictResolver implementations
+// ---------------------------------------------------------------------------
+
+/// Resolver that always overwrites with the profile version (used with --force).
+struct ForceResolver;
+
+impl ConflictResolver for ForceResolver {
+    fn resolve(
+        &self,
+        _relative_path: &Path,
+        _local_content: &[u8],
+        _profile_content: &[u8],
+    ) -> dot_agent_core::Result<Resolution> {
+        Ok(Resolution::OverwriteWithProfile)
+    }
+}
+
+/// Interactive resolver that prompts the user for each conflicting file.
+struct InteractiveResolver;
+
+impl ConflictResolver for InteractiveResolver {
+    fn resolve(
+        &self,
+        relative_path: &Path,
+        _local_content: &[u8],
+        _profile_content: &[u8],
+    ) -> dot_agent_core::Result<Resolution> {
+        println!();
+        println!(
+            "  {} -- modified locally",
+            relative_path.display().to_string().yellow()
+        );
+        println!("    [k]eep local  [o]verwrite with profile  [a]bort");
+
+        loop {
+            print!("    > ");
+            Write::flush(&mut io::stdout())?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+
+            match input.trim().to_lowercase().as_str() {
+                "k" => return Ok(Resolution::KeepLocal),
+                "o" => return Ok(Resolution::OverwriteWithProfile),
+                "a" => return Ok(Resolution::Abort),
+                _ => {
+                    println!("    Invalid choice. Enter k, o, or a.");
+                }
+            }
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -3087,9 +3143,49 @@ fn handle_switch(
         );
     }
 
-    // Remove current profiles
+    // [1/3] Check local changes before removing
     println!();
-    println!("Removing current profiles...");
+    println!("[1/3] Checking local changes...");
+    let mut has_local_changes = false;
+    for current_name in &current_profiles {
+        if let Ok(current_profile) = profile_manager.get_profile(current_name) {
+            match installer.diff(&current_profile, &target_dir, &ignore_config) {
+                Ok(diff) => {
+                    for file_info in &diff.files {
+                        match file_info.status {
+                            FileStatus::Modified => {
+                                println!(
+                                    "  {}  {}",
+                                    "MODIFIED".yellow(),
+                                    file_info.relative_path.display()
+                                );
+                                has_local_changes = true;
+                            }
+                            FileStatus::Added => {
+                                println!(
+                                    "  {}    {}",
+                                    "ADDED".cyan(),
+                                    file_info.relative_path.display()
+                                );
+                                has_local_changes = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  {} checking {}: {}", "Warning:".yellow(), current_name, e);
+                }
+            }
+        }
+    }
+    if !has_local_changes {
+        println!("  No local changes detected.");
+    }
+
+    // [2/3] Remove current profiles
+    println!();
+    println!("[2/3] Removing current profiles...");
     let remove_opts = InstallOptions::new()
         .force(force)
         .ignore_config(ignore_config.clone());
@@ -3111,19 +3207,33 @@ fn handle_switch(
         }
     }
 
-    // Install new profile
+    // [3/3] Install new profile with conflict resolver
     println!();
-    println!("Installing {}...", profile_name);
-    let install_opts = InstallOptions::new()
-        .force(force)
-        .ignore_config(ignore_config.clone());
-    let result = installer.install(&new_profile, &target_dir, &install_opts)?;
+    println!("[3/3] Installing {}...", profile_name);
+    let result = if force {
+        let resolver = ForceResolver;
+        let install_opts = InstallOptions::new()
+            .force(force)
+            .ignore_config(ignore_config.clone())
+            .conflict_resolver(&resolver);
+        installer.install(&new_profile, &target_dir, &install_opts)?
+    } else {
+        let resolver = InteractiveResolver;
+        let install_opts = InstallOptions::new()
+            .force(force)
+            .ignore_config(ignore_config.clone())
+            .conflict_resolver(&resolver);
+        installer.install(&new_profile, &target_dir, &install_opts)?
+    };
 
     println!();
     println!("{}", "Switch complete!".green());
     println!("  Installed: {} files", result.installed);
     if result.skipped > 0 {
-        println!("  Skipped: {} files", result.skipped);
+        println!("  Skipped:   {} files", result.skipped);
+    }
+    if result.conflicts > 0 {
+        println!("  Conflicts: {} files", result.conflicts);
     }
 
     Ok(())
