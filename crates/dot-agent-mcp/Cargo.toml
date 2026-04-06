@@ -6,7 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+rust-version.workspace = true
 description = "MCP server for dot-agent profile management"
+readme = "../../README.md"
 keywords = ["mcp", "dotfiles", "configuration", "ai", "claude"]
 categories = ["command-line-utilities", "development-tools"]
 
@@ -19,7 +21,7 @@ name = "dot_agent_mcp"
 path = "src/lib.rs"
 
 [dependencies]
-dot-agent-core = { path = "../dot-agent-core" }
+dot-agent-core = { path = "../dot-agent-core", version = "0.5.0" }
 rmcp = { version = "0.17", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
